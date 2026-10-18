@@ -15,7 +15,7 @@ A small personal notes app with a Rust serverless API, a static browser UI, and 
 ## Set up Neon
 
 1. Create a Neon project and copy its pooled connection string.
-2. Run [`migrations/0001_init.sql`](migrations/0001_init.sql) against the Neon database using the Neon SQL Editor or `psql`.
+2. Run [`migrations/0001_init.sql`](migrations/0001_init.sql), then [`migrations/0002_abuse_controls.sql`](migrations/0002_abuse_controls.sql) against the Neon database using the Neon SQL Editor or `psql`.
 3. Set `DATABASE_URL` to the connection string. Keep `sslmode=require` enabled.
 
 ## Run and deploy

@@ -1,3 +1,4 @@
+﻿#[path = "../src/shared.rs"]
 mod shared;
 use serde::Deserialize;
 use serde_json::json;
