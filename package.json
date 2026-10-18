@@ -1,0 +1,7 @@
+{
+  "name": "daynote-local-tools",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/serve.mjs"
+  }
+}

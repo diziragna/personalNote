@@ -1,0 +1,34 @@
+[package]
+name = "daynote"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+argon2 = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+http-body-util = "0.1"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+vercel_runtime = "2"
+
+[[bin]]
+name = "auth"
+path = "api/auth.rs"
+
+[[bin]]
+name = "notes"
+path = "api/notes.rs"
+
+[[bin]]
+name = "comments"
+path = "api/comments.rs"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3

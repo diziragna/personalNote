@@ -1,0 +1,10 @@
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS locked_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS rate_limit_ips (
+    ip INET PRIMARY KEY,
+    window_started_at TIMESTAMPTZ NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    blocked_at TIMESTAMPTZ
+);

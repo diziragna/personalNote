@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4f0">
+  <title>Daynote — a quieter place for your thoughts</title>
+  <script>try{if(localStorage.getItem('daynote.theme')==='dark')document.documentElement.dataset.theme='dark'}catch{}</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Daynote home"><span class="brand-mark">d.</span><span>daynote</span></a>
+      <span id="local-badge" class="local-badge" hidden>LOCAL PREVIEW · THIS BROWSER ONLY</span>
+      <div id="signed-in-nav" class="signed-in-nav" hidden>
+        <button id="account-button" class="account-button" aria-label="Account settings"><span id="avatar" class="avatar">D</span><span id="nav-username"></span><span class="chevron">⌄</span></button>
+        <div id="account-menu" class="account-menu" hidden>
+          <button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">☾ &nbsp; Dark mode</button>
+          <button id="settings-button">Account settings</button>
+          <button id="signout-button" class="signout">Sign out</button>
+        </div>
+      </div>
+      <a id="nav-signin" class="nav-link" href="#signin">Sign in <span>↗</span></a>
+    </header>
+
+    <main>
+      <section id="auth-view" class="auth-layout">
+        <div class="intro-panel">
+          <div class="eyebrow"><span class="eyebrow-dot"></span> YOUR SPACE, YOUR PACE</div>
+          <h1>A little room<br>to <em>think clearly.</em></h1>
+          <p class="intro-copy">Keep the thoughts, plans, and small things that matter — all in one calm place.</p>
+          <div class="preview-card" aria-hidden="true">
+            <div class="preview-top"><span>Today</span><span id="preview-date" class="preview-date"></span></div>
+            <div class="preview-line"><span class="check checked">✓</span><span class="done-text">Pick up a few things for dinner</span></div>
+            <div class="preview-line"><span class="check"></span><span>Send the note I’ve been putting off</span></div>
+            <div class="preview-line"><span class="check"></span><span>Take a proper lunch break</span></div>
+            <div class="preview-foot"><span class="tiny-spark">✳</span> one thing at a time</div>
+          </div>
+          <div class="intro-caption"><span class="caption-rule"></span> Simple notes. A little more focus.</div>
+        </div>
+
+        <div class="auth-panel">
+          <div class="auth-heading">
+            <div class="auth-icon">✳</div>
+            <p class="eyebrow muted">WELCOME TO DAYNOTE</p>
+            <h2 id="auth-title">Good to have you back.</h2>
+            <p id="auth-subtitle">Sign in to pick up where you left off.</p>
+          </div>
+          <div class="auth-tabs"><button class="auth-tab active" data-mode="signin">Sign in</button><button class="auth-tab" data-mode="signup">Create account</button></div>
+          <form id="auth-form" class="form-stack">
+            <label for="username">Username</label>
+            <input id="username" name="username" autocomplete="username" minlength="3" maxlength="24" placeholder="e.g. alex_morgan" required>
+            <div class="label-row"><label for="password">Password</label><span class="input-hint">At least 8 characters</span></div>
+            <input id="password" name="password" type="password" autocomplete="current-password" minlength="8" required placeholder="Enter your password">
+            <p id="auth-error" class="form-error" role="alert" hidden></p>
+            <button id="auth-submit" class="primary-button" type="submit"><span>Sign in</span><span class="button-arrow">→</span></button>
+          </form>
+          <div class="auth-note"><span class="lock-icon">▣</span> Your notes stay private to your account.</div>
+        </div>
+      </section>
+
+      <section id="dashboard" class="dashboard" hidden>
+        <div class="dashboard-heading">
+          <div><p class="eyebrow muted"><span class="eyebrow-dot"></span> YOUR PERSONAL NOTEBOOK</p><h1 id="greeting">A fresh page.</h1><p class="dashboard-subtitle">A place for the things on your mind.</p></div>
+          <div class="date-chip"><span class="date-chip-icon">◷</span><span id="today-label"></span></div>
+        </div>
+        <form id="note-form" class="composer">
+          <span class="composer-plus">＋</span>
+          <input id="note-content" name="content" maxlength="2000" placeholder="Write down a thought, a task, anything…" aria-label="New note" required>
+          <button id="add-note" type="submit">Add note <span>↗</span></button>
+        </form>
+        <div class="note-toolbar"><span id="note-count">YOUR NOTES <b>0</b></span><span class="toolbar-hint"><span class="mini-check">✓</span> Check it off when it’s done</span></div>
+        <div id="notes-list" class="notes-list"></div>
+        <div id="empty-state" class="empty-state" hidden><div class="empty-illustration"><span>✳</span><i></i><b></b></div><h3>A clear page feels good.</h3><p>Add your first note above. It’ll be right here when you need it.</p></div>
+        <footer class="dashboard-footer"><span>Made for the little things.</span><span>✳ &nbsp; daynote</span></footer>
+      </section>
+    </main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <dialog id="settings-dialog" class="settings-dialog">
+      <form id="settings-form" method="dialog" class="settings-card">
+        <button type="button" id="close-settings" class="modal-close" aria-label="Close">×</button>
+        <div class="auth-icon">✳</div><p class="eyebrow muted">YOUR ACCOUNT</p><h2>Make it yours.</h2><p class="settings-copy">Update your username or choose a new password.</p>
+        <label for="settings-username">Username</label><input id="settings-username" name="username" minlength="3" maxlength="24" required>
+        <label for="current-password">Current password</label><input id="current-password" type="password" autocomplete="current-password" required>
+        <label for="new-password">New password <span class="optional">optional</span></label><input id="new-password" type="password" minlength="8" autocomplete="new-password" placeholder="Leave blank to keep your password">
+        <p id="settings-error" class="form-error" role="alert" hidden></p>
+        <button id="save-settings" type="submit" class="primary-button">Save changes <span class="button-arrow">→</span></button>
+      </form>
+    </dialog>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

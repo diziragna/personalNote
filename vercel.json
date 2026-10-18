@@ -1,0 +1,6 @@
+{
+  "outputDirectory": "public",
+  "functions": {
+    "api/*.rs": { "maxDuration": 10 }
+  }
+}
