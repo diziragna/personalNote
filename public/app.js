@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { username: null, mode: 'signin', notes: [], comments: [], activeCommentNoteId: null, editingCommentId: null, collapsedDays: new Set(), toastTimer: null };
+const state = { username: null, mode: 'signin', notes: [], comments: [], activeCommentNoteId: null, editingCommentId: null, collapsedDays: new Set(), collapsedComments: new Set(), toastTimer: null };
 const IS_LOCAL_PREVIEW = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 const LOCAL_ACCOUNT_KEY = 'daynote.local.account';
 const LOCAL_NOTES_KEY = 'daynote.local.notes';
@@ -305,6 +305,7 @@ function renderNotes() {
       addComment.addEventListener('click', () => {
         menu.hidden = true;
         menuButton.setAttribute('aria-expanded', 'false');
+        state.collapsedComments.delete(note.id);
         state.activeCommentNoteId = state.activeCommentNoteId === note.id ? null : note.id;
         renderNotes();
         if (state.activeCommentNoteId) document.querySelector(`#comment-input-${CSS.escape(note.id)}`)?.focus();
@@ -319,6 +320,7 @@ function renderNotes() {
           await request('/api/notes', { method: 'DELETE', body: JSON.stringify({ id: note.id }) });
           state.notes = state.notes.filter((item) => item.id !== note.id);
           state.comments = state.comments.filter((comment) => comment.note_id !== note.id);
+          state.collapsedComments.delete(note.id);
           renderNotes();
           toast('Note deleted.');
         } catch (error) {
@@ -333,8 +335,28 @@ function renderNotes() {
 
       const noteComments = state.comments.filter((comment) => comment.note_id === note.id);
       if (noteComments.length || state.activeCommentNoteId === note.id) {
+        const commentsCollapsed = state.collapsedComments.has(note.id);
+        if (noteComments.length) {
+          const toggleRow = document.createElement('div');
+          toggleRow.className = 'comment-toggle-row';
+          const toggle = document.createElement('button');
+          toggle.className = 'comment-toggle';
+          toggle.type = 'button';
+          toggle.textContent = `${commentsCollapsed ? 'Show' : 'Hide'} comments (${noteComments.length})`;
+          toggle.setAttribute('aria-expanded', String(!commentsCollapsed));
+          toggle.setAttribute('aria-controls', `comment-panel-${note.id}`);
+          toggle.addEventListener('click', () => {
+            if (state.collapsedComments.has(note.id)) state.collapsedComments.delete(note.id);
+            else state.collapsedComments.add(note.id);
+            renderNotes();
+          });
+          toggleRow.append(toggle);
+          dayBody.append(toggleRow);
+        }
         const panel = document.createElement('div');
         panel.className = 'comment-panel';
+        panel.id = `comment-panel-${note.id}`;
+        panel.hidden = commentsCollapsed;
         for (const comment of noteComments) {
           const commentRow = document.createElement('div');
           commentRow.className = 'comment-entry';
@@ -548,6 +570,7 @@ $('#signout-button').addEventListener('click', async () => {
   state.comments = [];
   state.activeCommentNoteId = null;
   state.editingCommentId = null;
+  state.collapsedComments.clear();
   $('#signed-in-nav').hidden = true;
   $('#nav-signin').hidden = false;
   $('#dashboard').hidden = true;
