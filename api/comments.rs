@@ -18,11 +18,12 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
     let Some(uid) = user_id(&db, &req).await? else { return unauthorized() };
     match req.method().as_str() {
         "GET" => {
-            let rows = sqlx::query("SELECT c.id, c.note_id, c.content, c.created_at FROM note_comments c JOIN notes n ON n.id=c.note_id WHERE n.user_id=$1 ORDER BY c.created_at ASC")
+            let rows = sqlx::query("SELECT c.id, c.note_id, c.content, c.due_date, c.created_at FROM note_comments c JOIN notes n ON n.id=c.note_id WHERE n.user_id=$1 ORDER BY c.created_at ASC")
                 .bind(uid).fetch_all(&db).await?;
             let comments: Vec<_> = rows.iter().map(|r| json!({
                 "id": r.get::<uuid::Uuid,_>("id"), "note_id": r.get::<uuid::Uuid,_>("note_id"),
-                "content": r.get::<String,_>("content"), "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at")
+                "content": r.get::<String,_>("content"), "due_date": r.get::<Option<chrono::NaiveDate>,_>("due_date"),
+                "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at")
             })).collect();
             response(200, json!({"comments": comments}))
         }
@@ -30,24 +31,28 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
             let input: NewComment = match body(req).await { Ok(v) => v, Err(_) => return error(400, "Invalid request body.") };
             let content = input.content.trim();
             if content.is_empty() || content.chars().count() > 2000 { return error(400, "A comment must contain 1-2,000 characters.") }
-            let row = sqlx::query("INSERT INTO note_comments (note_id, content) SELECT id, $3 FROM notes WHERE id=$1 AND user_id=$2 RETURNING id, note_id, content, created_at")
-                .bind(input.note_id).bind(uid).bind(content).fetch_optional(&db).await?;
+            let due_date = match parse_due_date(input.due_date.as_deref()) { Ok(v) => v, Err(_) => return error(400, "Use a valid deadline date.") };
+            let row = sqlx::query("INSERT INTO note_comments (note_id, content, due_date) SELECT id, $3, $4 FROM notes WHERE id=$1 AND user_id=$2 RETURNING id, note_id, content, due_date, created_at")
+                .bind(input.note_id).bind(uid).bind(content).bind(due_date).fetch_optional(&db).await?;
             let Some(row) = row else { return error(404, "Note not found.") };
             response(201, json!({"comment": {
                 "id": row.get::<uuid::Uuid,_>("id"), "note_id": row.get::<uuid::Uuid,_>("note_id"),
-                "content": row.get::<String,_>("content"), "created_at": row.get::<chrono::DateTime<chrono::Utc>,_>("created_at")
+                "content": row.get::<String,_>("content"), "due_date": row.get::<Option<chrono::NaiveDate>,_>("due_date"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>,_>("created_at")
             }}))
         }
         "PATCH" => {
             let input: UpdateComment = match body(req).await { Ok(v) => v, Err(_) => return error(400, "Invalid request body.") };
             let content = input.content.trim();
             if content.is_empty() || content.chars().count() > 2000 { return error(400, "A comment must contain 1-2,000 characters.") }
-            let row = sqlx::query("UPDATE note_comments c SET content=$1 WHERE c.id=$2 AND EXISTS (SELECT 1 FROM notes n WHERE n.id=c.note_id AND n.user_id=$3) RETURNING c.id, c.note_id, c.content, c.created_at")
-                .bind(content).bind(input.id).bind(uid).fetch_optional(&db).await?;
+            let due_date = match parse_due_date(input.due_date.as_deref()) { Ok(v) => v, Err(_) => return error(400, "Use a valid deadline date.") };
+            let row = sqlx::query("UPDATE note_comments c SET content=$1, due_date=CASE WHEN $2 THEN $3 ELSE c.due_date END WHERE c.id=$4 AND EXISTS (SELECT 1 FROM notes n WHERE n.id=c.note_id AND n.user_id=$5) RETURNING c.id, c.note_id, c.content, c.due_date, c.created_at")
+                .bind(content).bind(input.due_date.is_some()).bind(due_date).bind(input.id).bind(uid).fetch_optional(&db).await?;
             let Some(row) = row else { return error(404, "Comment not found.") };
             response(200, json!({"comment": {
                 "id": row.get::<uuid::Uuid,_>("id"), "note_id": row.get::<uuid::Uuid,_>("note_id"),
-                "content": row.get::<String,_>("content"), "created_at": row.get::<chrono::DateTime<chrono::Utc>,_>("created_at")
+                "content": row.get::<String,_>("content"), "due_date": row.get::<Option<chrono::NaiveDate>,_>("due_date"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>,_>("created_at")
             }}))
         }
         "DELETE" => {

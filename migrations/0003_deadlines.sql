@@ -1,0 +1,5 @@
+ALTER TABLE notes
+    ADD COLUMN IF NOT EXISTS due_date DATE;
+
+ALTER TABLE note_comments
+    ADD COLUMN IF NOT EXISTS due_date DATE;
