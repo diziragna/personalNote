@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { username: null, mode: 'signin', notes: [], comments: [], activeCommentNoteId: null, editingCommentId: null, editingDeadlineNoteId: null, collapsedDays: new Set(), collapsedComments: new Set(), toastTimer: null };
+const state = { username: null, mode: 'signin', notes: [], comments: [], activeCommentNoteId: null, editingCommentId: null, collapsedDays: new Set(), collapsedComments: new Set(), toastTimer: null };
 const IS_LOCAL_PREVIEW = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 const LOCAL_ACCOUNT_KEY = 'daynote.local.account';
 const LOCAL_NOTES_KEY = 'daynote.local.notes';
@@ -78,7 +78,7 @@ async function localRequest(url, options = {}) {
     if (method === 'POST') {
       const content = String(payload.content || '').trim();
       if (!content || content.length > 2000) localError('A note must contain 1-2,000 characters.');
-      const note = { id: crypto.randomUUID(), content, completed: false, due_date: payload.due_date || null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const note = { id: crypto.randomUUID(), content, completed: false, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
       all.unshift(note);
       saveNotes(all);
       return { note };
@@ -92,7 +92,6 @@ async function localRequest(url, options = {}) {
         all[index].content = content;
       }
       if (payload.completed !== undefined) all[index].completed = Boolean(payload.completed);
-      if (Object.hasOwn(payload, 'due_date')) all[index].due_date = payload.due_date || null;
       all[index].updated_at = new Date().toISOString();
       saveNotes(all);
       return { note: all[index] };
@@ -110,7 +109,7 @@ async function localRequest(url, options = {}) {
       const content = String(payload.content || '').trim();
       if (!content || content.length > 2000) localError('A comment must contain 1-2,000 characters.');
       if (!notes().some((note) => note.id === payload.note_id)) localError('Note not found.', 404);
-      const comment = { id: crypto.randomUUID(), note_id: payload.note_id, content, due_date: payload.due_date || null, created_at: new Date().toISOString() };
+      const comment = { id: crypto.randomUUID(), note_id: payload.note_id, content, created_at: new Date().toISOString() };
       const all = comments();
       all.push(comment);
       saveComments(all);
@@ -123,7 +122,6 @@ async function localRequest(url, options = {}) {
       const comment = all.find((item) => item.id === payload.id);
       if (!comment || !notes().some((note) => note.id === comment.note_id)) localError('Comment not found.', 404);
       comment.content = content;
-      if (Object.hasOwn(payload, 'due_date')) comment.due_date = payload.due_date || null;
       saveComments(all);
       return { comment };
     }
@@ -191,10 +189,6 @@ function setMode(mode) {
 
 function formatDate(date) {
   return new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(date);
-}
-
-function formatDeadline(value) {
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${value}T00:00:00`));
 }
 
 function dateKey(date) {
@@ -278,19 +272,10 @@ function renderNotes() {
           checkbox.disabled = false;
         }
       });
-      const main = document.createElement('div');
-      main.className = 'note-main';
       const text = document.createElement('label');
       text.className = 'note-text';
       text.htmlFor = checkbox.id;
       text.textContent = note.content;
-      main.append(text);
-      if (note.due_date) {
-        const deadline = document.createElement('span');
-        deadline.className = 'deadline-label';
-        deadline.textContent = `Due ${formatDeadline(note.due_date)}`;
-        main.append(deadline);
-      }
       const time = document.createElement('time');
       time.className = 'note-time';
       time.dateTime = note.created_at;
@@ -312,17 +297,6 @@ function renderNotes() {
         document.querySelectorAll('.more-button').forEach((other) => other.setAttribute('aria-expanded', 'false'));
         menu.hidden = !opening;
         menuButton.setAttribute('aria-expanded', String(opening));
-      });
-      const editDeadline = document.createElement('button');
-      editDeadline.className = 'menu-item';
-      editDeadline.type = 'button';
-      editDeadline.textContent = note.due_date ? 'Edit deadline' : 'Set deadline';
-      editDeadline.addEventListener('click', () => {
-        menu.hidden = true;
-        menuButton.setAttribute('aria-expanded', 'false');
-        state.editingDeadlineNoteId = state.editingDeadlineNoteId === note.id ? null : note.id;
-        renderNotes();
-        document.querySelector(`#note-deadline-${CSS.escape(note.id)}`)?.focus();
       });
       const addComment = document.createElement('button');
       addComment.className = 'menu-item';
@@ -354,44 +328,10 @@ function renderNotes() {
           deleteNote.disabled = false;
         }
       });
-      menu.append(editDeadline, addComment, deleteNote);
+      menu.append(addComment, deleteNote);
       actions.append(menuButton, menu);
-      row.append(checkbox, main, time, actions);
+      row.append(checkbox, text, time, actions);
       dayBody.append(row);
-
-      if (state.editingDeadlineNoteId === note.id) {
-        const deadlineForm = document.createElement('form');
-        deadlineForm.className = 'deadline-edit-form';
-        const dateInput = document.createElement('input');
-        dateInput.id = `note-deadline-${note.id}`;
-        dateInput.type = 'date';
-        dateInput.value = note.due_date || '';
-        dateInput.setAttribute('aria-label', 'Note deadline');
-        const saveDeadline = document.createElement('button');
-        saveDeadline.type = 'submit';
-        saveDeadline.textContent = 'Save deadline';
-        const cancelDeadline = document.createElement('button');
-        cancelDeadline.type = 'button';
-        cancelDeadline.className = 'cancel-edit';
-        cancelDeadline.textContent = 'Cancel';
-        cancelDeadline.addEventListener('click', () => { state.editingDeadlineNoteId = null; renderNotes(); });
-        deadlineForm.append(dateInput, saveDeadline, cancelDeadline);
-        deadlineForm.addEventListener('submit', async (event) => {
-          event.preventDefault();
-          saveDeadline.disabled = true;
-          try {
-            const result = await request('/api/notes', { method: 'PATCH', body: JSON.stringify({ id: note.id, due_date: dateInput.value }) });
-            Object.assign(note, result.note);
-            state.editingDeadlineNoteId = null;
-            renderNotes();
-            toast(dateInput.value ? 'Deadline updated.' : 'Deadline removed.');
-          } catch (error) {
-            toast(error.message);
-            saveDeadline.disabled = false;
-          }
-        });
-        dayBody.append(deadlineForm);
-      }
 
       const noteComments = state.comments.filter((comment) => comment.note_id === note.id);
       if (noteComments.length || state.activeCommentNoteId === note.id) {
@@ -430,12 +370,6 @@ function renderNotes() {
           commentTime.className = 'comment-time';
           commentTime.dateTime = comment.created_at;
           commentTime.textContent = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(comment.created_at));
-          let deadlineLabel = null;
-          if (comment.due_date) {
-            deadlineLabel = document.createElement('span');
-            deadlineLabel.className = 'deadline-label comment-deadline';
-            deadlineLabel.textContent = `Due ${formatDeadline(comment.due_date)}`;
-          }
           const commentActions = document.createElement('div');
           commentActions.className = 'comment-actions';
           const commentMenuButton = document.createElement('button');
@@ -488,10 +422,6 @@ function renderNotes() {
             editInput.maxLength = 2000;
             editInput.setAttribute('aria-label', 'Edit comment');
             editInput.required = true;
-            const editDueDate = document.createElement('input');
-            editDueDate.type = 'date';
-            editDueDate.value = comment.due_date || '';
-            editDueDate.setAttribute('aria-label', 'Comment deadline');
             const saveEdit = document.createElement('button');
             saveEdit.type = 'submit';
             saveEdit.textContent = 'Save';
@@ -500,12 +430,12 @@ function renderNotes() {
             cancelEdit.className = 'cancel-edit';
             cancelEdit.textContent = 'Cancel';
             cancelEdit.addEventListener('click', () => { state.editingCommentId = null; renderNotes(); });
-            editForm.append(editInput, editDueDate, saveEdit, cancelEdit);
+            editForm.append(editInput, saveEdit, cancelEdit);
             editForm.addEventListener('submit', async (event) => {
               event.preventDefault();
               saveEdit.disabled = true;
               try {
-                const result = await request('/api/comments', { method: 'PATCH', body: JSON.stringify({ id: comment.id, content: editInput.value.trim(), due_date: editDueDate.value }) });
+                const result = await request('/api/comments', { method: 'PATCH', body: JSON.stringify({ id: comment.id, content: editInput.value.trim() }) });
                 Object.assign(comment, result.comment);
                 state.editingCommentId = null;
                 renderNotes();
@@ -517,9 +447,7 @@ function renderNotes() {
             });
             commentRow.append(dot, editForm, commentTime, commentActions);
           } else {
-            commentRow.append(dot, content);
-            if (deadlineLabel) commentRow.append(deadlineLabel);
-            commentRow.append(commentTime, commentActions);
+            commentRow.append(dot, content, commentTime, commentActions);
           }
           panel.append(commentRow);
         }
@@ -533,18 +461,15 @@ function renderNotes() {
           input.placeholder = 'Write a comment…';
           input.setAttribute('aria-label', 'Write a comment');
           input.required = true;
-          const dueDate = document.createElement('input');
-          dueDate.type = 'date';
-          dueDate.setAttribute('aria-label', 'Optional comment deadline');
           const submit = document.createElement('button');
           submit.type = 'submit';
           submit.textContent = 'Comment';
-          form.append(input, dueDate, submit);
+          form.append(input, submit);
           form.addEventListener('submit', async (event) => {
             event.preventDefault();
             submit.disabled = true;
             try {
-              const result = await request('/api/comments', { method: 'POST', body: JSON.stringify({ note_id: note.id, content: input.value.trim(), due_date: dueDate.value || null }) });
+              const result = await request('/api/comments', { method: 'POST', body: JSON.stringify({ note_id: note.id, content: input.value.trim() }) });
               state.comments.push(result.comment);
               renderNotes();
               document.querySelector(`#comment-input-${CSS.escape(note.id)}`)?.focus();
@@ -606,17 +531,15 @@ $('#auth-form').addEventListener('submit', async (event) => {
 $('#note-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const input = $('#note-content');
-  const dueDate = $('#note-due-date');
   const button = $('#add-note');
   const content = input.value.trim();
   if (!content) return;
   button.disabled = true;
   try {
-    const data = await request('/api/notes', { method: 'POST', body: JSON.stringify({ content, due_date: dueDate.value || null }) });
+    const data = await request('/api/notes', { method: 'POST', body: JSON.stringify({ content }) });
     state.notes.unshift(data.note);
     renderNotes();
     input.value = '';
-    dueDate.value = '';
     input.focus();
     toast('Note added.');
   } catch (error) {
@@ -647,7 +570,6 @@ $('#signout-button').addEventListener('click', async () => {
   state.comments = [];
   state.activeCommentNoteId = null;
   state.editingCommentId = null;
-  state.editingDeadlineNoteId = null;
   state.collapsedComments.clear();
   $('#signed-in-nav').hidden = true;
   $('#nav-signin').hidden = false;

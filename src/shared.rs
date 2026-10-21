@@ -96,13 +96,6 @@ pub fn valid_username(name: &str) -> bool {
 
 pub fn valid_password(password: &str) -> bool { (8..=128).contains(&password.len()) }
 
-pub fn parse_due_date(value: Option<&str>) -> Result<Option<chrono::NaiveDate>, ()> {
-    match value {
-        None | Some("") => Ok(None),
-        Some(value) => chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map(Some).map_err(|_| ()),
-    }
-}
-
 pub fn unauthorized() -> Result<Response<ResponseBody>, Error> { error(401, "Please sign in to continue.") }
 
 pub fn session_cookie_response(status: u16, payload: Value, token: &str) -> Result<Response<ResponseBody>, Error> {
@@ -114,14 +107,14 @@ pub fn session_cookie_response(status: u16, payload: Value, token: &str) -> Resu
 #[derive(Deserialize)]
 pub struct ChangeCredentials { pub current_password: String, pub username: String, pub new_password: Option<String> }
 #[derive(Deserialize)]
-pub struct NewNote { pub content: String, pub due_date: Option<String> }
+pub struct NewNote { pub content: String }
 #[derive(Deserialize)]
-pub struct UpdateNote { pub id: Uuid, pub content: Option<String>, pub completed: Option<bool>, pub due_date: Option<String> }
+pub struct UpdateNote { pub id: Uuid, pub content: Option<String>, pub completed: Option<bool> }
 #[derive(Deserialize)]
 pub struct DeleteNote { pub id: Uuid }
 #[derive(Deserialize)]
-pub struct NewComment { pub note_id: Uuid, pub content: String, pub due_date: Option<String> }
+pub struct NewComment { pub note_id: Uuid, pub content: String }
 #[derive(Deserialize)]
-pub struct UpdateComment { pub id: Uuid, pub content: String, pub due_date: Option<String> }
+pub struct UpdateComment { pub id: Uuid, pub content: String }
 #[derive(Deserialize)]
 pub struct DeleteComment { pub id: Uuid }

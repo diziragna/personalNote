@@ -18,12 +18,11 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
     let Some(uid) = user_id(&db, &req).await? else { return unauthorized() };
     match req.method().as_str() {
         "GET" => {
-            let rows = sqlx::query("SELECT id, content, completed, due_date, created_at, updated_at FROM notes WHERE user_id=$1 ORDER BY created_at DESC")
+            let rows = sqlx::query("SELECT id, content, completed, created_at, updated_at FROM notes WHERE user_id=$1 ORDER BY created_at DESC")
                 .bind(uid).fetch_all(&db).await?;
             let notes: Vec<_> = rows.iter().map(|r| json!({
                 "id": r.get::<uuid::Uuid,_>("id"), "content": r.get::<String,_>("content"),
-                "completed": r.get::<bool,_>("completed"), "due_date": r.get::<Option<chrono::NaiveDate>,_>("due_date"),
-                "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),
+                "completed": r.get::<bool,_>("completed"), "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),
                 "updated_at": r.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")
             })).collect();
             response(200, json!({"notes": notes}))
@@ -32,19 +31,17 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
             let input: NewNote = match body(req).await { Ok(v) => v, Err(_) => return error(400, "Invalid request body.") };
             let content = input.content.trim();
             if content.is_empty() || content.chars().count() > 2000 { return error(400, "A note must contain 1-2,000 characters.") }
-            let due_date = match parse_due_date(input.due_date.as_deref()) { Ok(v) => v, Err(_) => return error(400, "Use a valid deadline date.") };
-            let row = sqlx::query("INSERT INTO notes (user_id, content, due_date) VALUES ($1,$2,$3) RETURNING id, content, completed, due_date, created_at, updated_at")
-                .bind(uid).bind(content).bind(due_date).fetch_one(&db).await?;
-            response(201, json!({"note": {"id":row.get::<uuid::Uuid,_>("id"),"content":row.get::<String,_>("content"),"completed":false,"due_date":row.get::<Option<chrono::NaiveDate>,_>("due_date"),"created_at":row.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),"updated_at":row.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")}}))
+            let row = sqlx::query("INSERT INTO notes (user_id, content) VALUES ($1,$2) RETURNING id, content, completed, created_at, updated_at")
+                .bind(uid).bind(content).fetch_one(&db).await?;
+            response(201, json!({"note": {"id":row.get::<uuid::Uuid,_>("id"),"content":row.get::<String,_>("content"),"completed":false,"created_at":row.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),"updated_at":row.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")}}))
         }
         "PATCH" => {
             let input: UpdateNote = match body(req).await { Ok(v) => v, Err(_) => return error(400, "Invalid request body.") };
             if let Some(content) = &input.content { if content.trim().is_empty() || content.chars().count() > 2000 { return error(400, "A note must contain 1-2,000 characters.") } }
-            let due_date = match parse_due_date(input.due_date.as_deref()) { Ok(v) => v, Err(_) => return error(400, "Use a valid deadline date.") };
-            let row = sqlx::query("UPDATE notes SET content=COALESCE($1,content), completed=COALESCE($2,completed), due_date=CASE WHEN $3 THEN $4 ELSE due_date END, updated_at=now() WHERE id=$5 AND user_id=$6 RETURNING id,content,completed,due_date,created_at,updated_at")
-                .bind(input.content.as_deref().map(str::trim)).bind(input.completed).bind(input.due_date.is_some()).bind(due_date).bind(input.id).bind(uid).fetch_optional(&db).await?;
+            let row = sqlx::query("UPDATE notes SET content=COALESCE($1,content), completed=COALESCE($2,completed), updated_at=now() WHERE id=$3 AND user_id=$4 RETURNING id,content,completed,created_at,updated_at")
+                .bind(input.content.as_deref().map(str::trim)).bind(input.completed).bind(input.id).bind(uid).fetch_optional(&db).await?;
             let Some(row) = row else { return error(404, "Note not found.") };
-            response(200, json!({"note":{"id":row.get::<uuid::Uuid,_>("id"),"content":row.get::<String,_>("content"),"completed":row.get::<bool,_>("completed"),"due_date":row.get::<Option<chrono::NaiveDate>,_>("due_date"),"created_at":row.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),"updated_at":row.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")}}))
+            response(200, json!({"note":{"id":row.get::<uuid::Uuid,_>("id"),"content":row.get::<String,_>("content"),"completed":row.get::<bool,_>("completed"),"created_at":row.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),"updated_at":row.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")}}))
         }
         "DELETE" => {
             let input: DeleteNote = match body(req).await { Ok(v) => v, Err(_) => return error(400, "Invalid request body.") };

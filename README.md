@@ -8,7 +8,6 @@ A small personal notes app with a Rust serverless API, a static browser UI, and 
 - Change your username and password from Account settings.
 - Add, complete, restore, and delete notes.
 - Add multiple timestamped comments to each note.
-- Optionally set or change a deadline date for notes and comments.
 - View notes grouped by date with their creation times.
 - Passwords are hashed with Argon2id. Sessions use random HttpOnly, Secure, SameSite cookies; only a SHA-256 digest of each session token is stored in Postgres.
 - Each account can only access its own notes.
@@ -16,7 +15,7 @@ A small personal notes app with a Rust serverless API, a static browser UI, and 
 ## Set up Neon
 
 1. Create a Neon project and copy its pooled connection string.
-2. Run [`migrations/0001_init.sql`](migrations/0001_init.sql), [`migrations/0002_abuse_controls.sql`](migrations/0002_abuse_controls.sql), and [`migrations/0003_deadlines.sql`](migrations/0003_deadlines.sql) in order against the Neon database using the Neon SQL Editor or `psql`.
+2. Run [`migrations/0001_init.sql`](migrations/0001_init.sql), then [`migrations/0002_abuse_controls.sql`](migrations/0002_abuse_controls.sql) against the Neon database using the Neon SQL Editor or `psql`.
 3. Set `DATABASE_URL` to the connection string. Keep `sslmode=require` enabled.
 
 ## Run and deploy
