@@ -1,29 +1,32 @@
 # Daynote
 
-A small personal notes app with a Rust serverless API, a static browser UI, and Neon Postgres storage. Notes are individual timestamped lines, grouped by their creation date. Each line can be checked off and restored.
+A small personal notes app with a Rust serverless API, a static browser UI, and Neon Postgres storage. Notes are sticky notes on a board that fills the browser tab: drag each one anywhere, and it stays where you left it.
 
 ## Features
 
 - Create an account with a username and password, then sign in and out.
 - Change your username and password from Account settings.
-- Add, complete, restore, and delete notes.
-- Add multiple timestamped comments to each note.
-- Optionally set or change a deadline date for notes and comments.
-- View notes grouped by date with their creation times.
+- Add a sticky note with **New note** or by double-clicking an empty spot on the board.
+- Drag notes by their header or footer; positions and stacking order are saved.
+- Give each note a title (double-click it to rename) and one of six colors.
+- Check notes off, and optionally set or change a deadline; overdue deadlines are highlighted. Checking a note off also ticks every checklist line in it.
+- Collapse a note to just its title bar and deadline, and resize a note from its bottom-right corner. New notes start at the default size.
+- Format note content with **bold** (Ctrl+B), *italic* (Ctrl+I), and checklist lines that each have their own checkbox (Ctrl+Enter ticks the current line). Content is stored as light markdown: `- [ ] ` / `- [x] ` lines, `**bold**`, `*italic*`, with `\` escaping literal `*`.
+- Delete notes after a confirmation. Deletion is permanent and cannot be undone.
 - Passwords are hashed with Argon2id. Sessions use random HttpOnly, Secure, SameSite cookies; only a SHA-256 digest of each session token is stored in Postgres.
 - Each account can only access its own notes.
 
 ## Set up Neon
 
 1. Create a Neon project and copy its pooled connection string.
-2. Run [`migrations/0001_init.sql`](migrations/0001_init.sql), [`migrations/0002_abuse_controls.sql`](migrations/0002_abuse_controls.sql), and [`migrations/0003_deadlines.sql`](migrations/0003_deadlines.sql) in order against the Neon database using the Neon SQL Editor or `psql`.
+2. Run [`migrations/0001_init.sql`](migrations/0001_init.sql), [`migrations/0002_abuse_controls.sql`](migrations/0002_abuse_controls.sql), [`migrations/0003_deadlines.sql`](migrations/0003_deadlines.sql), [`migrations/0004_sticky_notes.sql`](migrations/0004_sticky_notes.sql), and [`migrations/0005_note_layout.sql`](migrations/0005_note_layout.sql) in order against the Neon database using the Neon SQL Editor or `psql`.
 3. Set `DATABASE_URL` to the connection string. Keep `sslmode=require` enabled.
 
 ## Run and deploy
 
 The Vercel Rust runtime is in beta. Import this repository as a Vercel project, keep the project root as the repository root, and set `DATABASE_URL` in the project's Environment Variables for each deployment environment. Vercel serves the static app from `public/` and compiles the functions in `api/` using `Cargo.toml`.
 
-For a database-free local preview, run `npm install` once and `npm run dev`, then open `http://127.0.0.1:4173`. On localhost the app stores a demo account, notes, and comments in this browser only, so you can try signup, sign-in, credential changes, date grouping, checkboxes, comments, and deletion without Neon. This preview mode is only enabled on localhost; deployed domains use the Rust API and Neon.
+For a database-free local preview, run `npm install` once and `npm run dev`, then open `http://127.0.0.1:4173`. On localhost the app stores a demo account, notes, and comments in this browser only, so you can try signup, sign-in, credential changes, dragging, colors, titles, checkboxes, deadlines, and deletion without Neon. This preview mode is only enabled on localhost; deployed domains use the Rust API and Neon.
 
 To test the Rust API against Neon before deploying, install the Vercel CLI, copy `.env.example` to `.env.local`, set `DATABASE_URL`, apply the migration, and run `vercel dev`. `.env.local` is ignored by Git.
 
@@ -34,12 +37,12 @@ To test the Rust API against Neon before deploying, install the Vercel CLI, copy
 - `PATCH /api/auth` — update credentials with `{ "username": "…", "current_password": "…", "new_password": "…" }`; `new_password` is optional.
 - `DELETE /api/auth` — sign out and revoke the session.
 - `GET /api/notes` — list the current user’s notes.
-- `POST /api/notes` — JSON `{ "content": "…" }`.
-- `PATCH /api/notes` — JSON `{ "id": "…", "completed": true }` or `{ "id": "…", "content": "…" }`.
+- `POST /api/notes` — JSON `{ "title": "…", "content": "…", "color": "yellow", "pos_x": 40, "pos_y": 32, "due_date": "2026-12-31" }`; every field is optional.
+- `PATCH /api/notes` — JSON `{ "id": "…" }` plus any of `title`, `content`, `color`, `completed`, `due_date` (empty string clears it), `pos_x`, `pos_y`, `z_index`, `collapsed`, `width`, `height`.
 - `DELETE /api/notes` — JSON `{ "id": "…" }`.
-- `GET /api/comments` — list comments on the current user’s notes.
+- `GET /api/comments` — list comments on the current user’s notes. The board UI no longer shows comments; the API and existing data are kept.
 - `POST /api/comments` — JSON `{ "note_id": "…", "content": "…" }`.
 - `PATCH /api/comments` — JSON `{ "id": "…", "content": "…" }`.
 - `DELETE /api/comments` — JSON `{ "id": "…" }`.
 
-Usernames are 3–24 ASCII letters, numbers, underscores, or hyphens. Passwords must be 8–128 characters. Notes are limited to 2,000 characters.
+Usernames are 3–24 ASCII letters, numbers, underscores, or hyphens. Passwords must be 8–128 characters. Note titles are limited to 120 characters and note content to 2,000 characters. Colors are `yellow`, `pink`, `blue`, `green`, `purple`, or `orange`; positions are pixels from 0 to 100,000; note widths are 180–1,200 pixels and heights 120–1,200 pixels.

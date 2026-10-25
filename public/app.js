@@ -1,8 +1,11 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { username: null, mode: 'signin', notes: [], comments: [], activeCommentNoteId: null, editingCommentId: null, editingDeadlineNoteId: null, collapsedDays: new Set(), collapsedComments: new Set(), toastTimer: null };
+const state = { username: null, mode: 'signin', notes: [], editingTitleId: null, editingDeadlineNoteId: null, pendingDeleteId: null, toastTimer: null };
 const IS_LOCAL_PREVIEW = ['localhost', '127.0.0.1'].includes(window.location.hostname);
 const LOCAL_ACCOUNT_KEY = 'daynote.local.account';
 const LOCAL_NOTES_KEY = 'daynote.local.notes';
+const NOTE_COLORS = ['yellow', 'pink', 'blue', 'green', 'purple', 'orange'];
+const NOTE_WIDTH = 248;
+const GRID_GAP = 24;
 
 async function localPasswordHash(password, salt) {
   const bytes = new TextEncoder().encode(`${salt}:${password}`);
@@ -74,11 +77,20 @@ async function localRequest(url, options = {}) {
   if (url === '/api/notes') {
     requireSession();
     const all = notes();
+    const checkNoteFields = (fields) => {
+      if (fields.title !== undefined && String(fields.title).trim().length > 120) localError('A title can be at most 120 characters.');
+      if (fields.content !== undefined && String(fields.content).trim().length > 2000) localError('A note can be at most 2,000 characters.');
+      if (fields.color !== undefined && !NOTE_COLORS.includes(fields.color)) localError('Choose one of the available note colors.');
+      for (const key of ['pos_x', 'pos_y']) {
+        if (fields[key] != null && !(Number.isInteger(fields[key]) && fields[key] >= 0 && fields[key] <= 100000)) localError('That note position is out of range.');
+      }
+    };
     if (method === 'GET') return { notes: all.sort((a, b) => b.created_at.localeCompare(a.created_at)) };
     if (method === 'POST') {
-      const content = String(payload.content || '').trim();
-      if (!content || content.length > 2000) localError('A note must contain 1-2,000 characters.');
-      const note = { id: crypto.randomUUID(), content, completed: false, due_date: payload.due_date || null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      const fields = { title: String(payload.title || ''), content: String(payload.content || ''), color: payload.color || 'yellow', pos_x: payload.pos_x ?? null, pos_y: payload.pos_y ?? null };
+      checkNoteFields(fields);
+      const now = new Date().toISOString();
+      const note = { id: crypto.randomUUID(), ...fields, title: fields.title.trim(), content: fields.content.trim(), completed: false, collapsed: false, width: null, height: null, due_date: payload.due_date || null, z_index: Math.max(0, ...all.map((item) => item.z_index || 0)) + 1, created_at: now, updated_at: now };
       all.unshift(note);
       saveNotes(all);
       return { note };
@@ -86,12 +98,13 @@ async function localRequest(url, options = {}) {
     const index = all.findIndex((note) => note.id === payload.id);
     if (index < 0) localError('Note not found.', 404);
     if (method === 'PATCH') {
-      if (payload.content !== undefined) {
-        const content = String(payload.content).trim();
-        if (!content || content.length > 2000) localError('A note must contain 1-2,000 characters.');
-        all[index].content = content;
-      }
-      if (payload.completed !== undefined) all[index].completed = Boolean(payload.completed);
+      checkNoteFields(payload);
+      if (payload.z_index !== undefined && !(Number.isInteger(payload.z_index) && payload.z_index >= 0)) localError('That note layer is out of range.');
+      const sizeValid = (value, min) => value === undefined || (Number.isInteger(value) && value >= min && value <= 1200);
+      if (!sizeValid(payload.width, 180) || !sizeValid(payload.height, 120)) localError('That note size is out of range.');
+      for (const key of ['title', 'content']) if (payload[key] !== undefined) all[index][key] = String(payload[key]).trim();
+      for (const key of ['color', 'pos_x', 'pos_y', 'z_index', 'width', 'height']) if (payload[key] !== undefined) all[index][key] = payload[key];
+      for (const key of ['completed', 'collapsed']) if (payload[key] !== undefined) all[index][key] = Boolean(payload[key]);
       if (Object.hasOwn(payload, 'due_date')) all[index].due_date = payload.due_date || null;
       all[index].updated_at = new Date().toISOString();
       saveNotes(all);
@@ -189,9 +202,6 @@ function setMode(mode) {
   clearError($('#auth-error'));
 }
 
-function formatDate(date) {
-  return new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(date);
-}
 
 function formatDeadline(value) {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(`${value}T00:00:00`));
@@ -201,368 +211,656 @@ function dateKey(date) {
   return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 }
 
-function groupLabel(date) {
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(today.getDate() - 1);
-  if (dateKey(date) === dateKey(today)) return 'Today';
-  if (dateKey(date) === dateKey(yesterday)) return 'Yesterday';
-  return new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(date);
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
-function renderNotes() {
-  const list = $('#notes-list');
-  list.replaceChildren();
-  const groups = new Map();
+function noteCard(id) {
+  return document.querySelector(`.sticky-note[data-id="${CSS.escape(id)}"]`);
+}
+
+function closeNoteMenus() {
+  document.querySelectorAll('.note-menu').forEach((menu) => { menu.hidden = true; });
+  document.querySelectorAll('.more-button').forEach((button) => button.setAttribute('aria-expanded', 'false'));
+}
+
+function bringToFront(note, card) {
+  const top = state.notes.reduce((max, other) => (other === note ? max : Math.max(max, other.z_index || 0)), 0);
+  if (note.z_index > top) return;
+  note.z_index = top + 1;
+  card.style.zIndex = note.z_index;
+}
+
+// Notes from before the board existed have no position yet; lay them out in a grid without saving it.
+function placeUnpositionedNotes() {
+  const columns = Math.max(1, Math.floor(($('#dashboard').clientWidth - GRID_GAP) / (NOTE_WIDTH + GRID_GAP)));
+  let slot = 0;
   for (const note of state.notes) {
-    const date = new Date(note.created_at);
-    const key = dateKey(date);
-    if (!groups.has(key)) groups.set(key, { date, notes: [] });
-    groups.get(key).notes.push(note);
+    if (note.pos_x != null && note.pos_y != null) continue;
+    note.pos_x = GRID_GAP + (slot % columns) * (NOTE_WIDTH + GRID_GAP);
+    note.pos_y = GRID_GAP + Math.floor(slot / columns) * (220 + GRID_GAP);
+    slot += 1;
   }
+}
 
-  let total = 0;
-  for (const { date, notes } of groups.values()) {
-    const group = document.createElement('section');
-    group.className = 'day-group';
-    const key = dateKey(date);
-    const collapsed = state.collapsedDays.has(key);
-    group.classList.toggle('is-collapsed', collapsed);
-    const heading = document.createElement('button');
-    heading.className = 'day-heading';
-    heading.type = 'button';
-    heading.setAttribute('aria-expanded', String(!collapsed));
-    heading.setAttribute('aria-controls', `day-body-${key}`);
-    heading.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${groupLabel(date)} notes`);
-    heading.addEventListener('click', () => {
-      if (state.collapsedDays.has(key)) state.collapsedDays.delete(key);
-      else state.collapsedDays.add(key);
-      renderNotes();
-    });
-    const label = document.createElement('strong');
-    label.textContent = groupLabel(date);
-    const count = document.createElement('span');
-    count.className = 'day-count';
-    count.textContent = `${notes.length} ${notes.length === 1 ? 'note' : 'notes'}`;
-    const chevron = document.createElement('span');
-    chevron.className = 'day-chevron';
-    chevron.setAttribute('aria-hidden', 'true');
-    chevron.textContent = '⌄';
-    heading.append(label, count);
-    heading.append(chevron);
-    const dayBody = document.createElement('div');
-    dayBody.className = 'day-body';
-    dayBody.id = `day-body-${key}`;
-    dayBody.hidden = collapsed;
-    group.append(heading, dayBody);
-
-    for (const note of notes) {
-      total += 1;
-      const row = document.createElement('div');
-      row.className = `note-row${note.completed ? ' completed' : ''}`;
-      const checkbox = document.createElement('input');
-      checkbox.className = 'note-checkbox';
-      checkbox.type = 'checkbox';
-      checkbox.id = `note-${note.id}`;
-      checkbox.checked = note.completed;
-      checkbox.setAttribute('aria-label', note.completed ? 'Mark note active' : 'Mark note complete');
-      checkbox.addEventListener('change', async () => {
-        checkbox.disabled = true;
-        try {
-          const result = await request('/api/notes', { method: 'PATCH', body: JSON.stringify({ id: note.id, completed: checkbox.checked }) });
-          Object.assign(note, result.note);
-          renderNotes();
-        } catch (error) {
-          checkbox.checked = note.completed;
-          toast(error.message);
-          checkbox.disabled = false;
-        }
-      });
-      const main = document.createElement('div');
-      main.className = 'note-main';
-      const text = document.createElement('label');
-      text.className = 'note-text';
-      text.htmlFor = checkbox.id;
-      text.textContent = note.content;
-      main.append(text);
-      if (note.due_date) {
-        const deadline = document.createElement('span');
-        deadline.className = 'deadline-label';
-        deadline.textContent = `Due ${formatDeadline(note.due_date)}`;
-        main.append(deadline);
-      }
-      const time = document.createElement('time');
-      time.className = 'note-time';
-      time.dateTime = note.created_at;
-      time.textContent = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(note.created_at));
-      const actions = document.createElement('div');
-      actions.className = 'note-actions';
-      const menuButton = document.createElement('button');
-      menuButton.className = 'more-button';
-      menuButton.type = 'button';
-      menuButton.textContent = '⋮';
-      menuButton.setAttribute('aria-label', 'Note options');
-      menuButton.setAttribute('aria-expanded', 'false');
-      const menu = document.createElement('div');
-      menu.className = 'note-menu';
-      menu.hidden = true;
-      menuButton.addEventListener('click', () => {
-        const opening = menu.hidden;
-        document.querySelectorAll('.note-menu').forEach((other) => { other.hidden = true; });
-        document.querySelectorAll('.more-button').forEach((other) => other.setAttribute('aria-expanded', 'false'));
-        menu.hidden = !opening;
-        menuButton.setAttribute('aria-expanded', String(opening));
-      });
-      const editDeadline = document.createElement('button');
-      editDeadline.className = 'menu-item';
-      editDeadline.type = 'button';
-      editDeadline.textContent = note.due_date ? 'Edit deadline' : 'Set deadline';
-      editDeadline.addEventListener('click', () => {
-        menu.hidden = true;
-        menuButton.setAttribute('aria-expanded', 'false');
-        state.editingDeadlineNoteId = state.editingDeadlineNoteId === note.id ? null : note.id;
-        renderNotes();
-        document.querySelector(`#note-deadline-${CSS.escape(note.id)}`)?.focus();
-      });
-      const addComment = document.createElement('button');
-      addComment.className = 'menu-item';
-      addComment.type = 'button';
-      addComment.textContent = 'Add comment';
-      addComment.addEventListener('click', () => {
-        menu.hidden = true;
-        menuButton.setAttribute('aria-expanded', 'false');
-        state.collapsedComments.delete(note.id);
-        state.activeCommentNoteId = state.activeCommentNoteId === note.id ? null : note.id;
-        renderNotes();
-        if (state.activeCommentNoteId) document.querySelector(`#comment-input-${CSS.escape(note.id)}`)?.focus();
-      });
-      const deleteNote = document.createElement('button');
-      deleteNote.className = 'menu-item danger';
-      deleteNote.type = 'button';
-      deleteNote.textContent = 'Delete note';
-      deleteNote.addEventListener('click', async () => {
-        deleteNote.disabled = true;
-        try {
-          await request('/api/notes', { method: 'DELETE', body: JSON.stringify({ id: note.id }) });
-          state.notes = state.notes.filter((item) => item.id !== note.id);
-          state.comments = state.comments.filter((comment) => comment.note_id !== note.id);
-          state.collapsedComments.delete(note.id);
-          renderNotes();
-          toast('Note deleted.');
-        } catch (error) {
-          toast(error.message);
-          deleteNote.disabled = false;
-        }
-      });
-      menu.append(editDeadline, addComment, deleteNote);
-      actions.append(menuButton, menu);
-      row.append(checkbox, main, time, actions);
-      dayBody.append(row);
-
-      if (state.editingDeadlineNoteId === note.id) {
-        const deadlineForm = document.createElement('form');
-        deadlineForm.className = 'deadline-edit-form';
-        const dateInput = document.createElement('input');
-        dateInput.id = `note-deadline-${note.id}`;
-        dateInput.type = 'date';
-        dateInput.value = note.due_date || '';
-        dateInput.setAttribute('aria-label', 'Note deadline');
-        const saveDeadline = document.createElement('button');
-        saveDeadline.type = 'submit';
-        saveDeadline.textContent = 'Save deadline';
-        const cancelDeadline = document.createElement('button');
-        cancelDeadline.type = 'button';
-        cancelDeadline.className = 'cancel-edit';
-        cancelDeadline.textContent = 'Cancel';
-        cancelDeadline.addEventListener('click', () => { state.editingDeadlineNoteId = null; renderNotes(); });
-        deadlineForm.append(dateInput, saveDeadline, cancelDeadline);
-        deadlineForm.addEventListener('submit', async (event) => {
-          event.preventDefault();
-          saveDeadline.disabled = true;
-          try {
-            const result = await request('/api/notes', { method: 'PATCH', body: JSON.stringify({ id: note.id, due_date: dateInput.value }) });
-            Object.assign(note, result.note);
-            state.editingDeadlineNoteId = null;
-            renderNotes();
-            toast(dateInput.value ? 'Deadline updated.' : 'Deadline removed.');
-          } catch (error) {
-            toast(error.message);
-            saveDeadline.disabled = false;
-          }
-        });
-        dayBody.append(deadlineForm);
-      }
-
-      const noteComments = state.comments.filter((comment) => comment.note_id === note.id);
-      if (noteComments.length || state.activeCommentNoteId === note.id) {
-        const commentsCollapsed = state.collapsedComments.has(note.id);
-        if (noteComments.length) {
-          const toggleRow = document.createElement('div');
-          toggleRow.className = 'comment-toggle-row';
-          const toggle = document.createElement('button');
-          toggle.className = 'comment-toggle';
-          toggle.type = 'button';
-          toggle.textContent = `${commentsCollapsed ? 'Show' : 'Hide'} comments (${noteComments.length})`;
-          toggle.setAttribute('aria-expanded', String(!commentsCollapsed));
-          toggle.setAttribute('aria-controls', `comment-panel-${note.id}`);
-          toggle.addEventListener('click', () => {
-            if (state.collapsedComments.has(note.id)) state.collapsedComments.delete(note.id);
-            else state.collapsedComments.add(note.id);
-            renderNotes();
-          });
-          toggleRow.append(toggle);
-          dayBody.append(toggleRow);
-        }
-        const panel = document.createElement('div');
-        panel.className = 'comment-panel';
-        panel.id = `comment-panel-${note.id}`;
-        panel.hidden = commentsCollapsed;
-        for (const comment of noteComments) {
-          const commentRow = document.createElement('div');
-          commentRow.className = 'comment-entry';
-          const dot = document.createElement('span');
-          dot.className = 'comment-dot';
-          dot.textContent = '↳';
-          const content = document.createElement('span');
-          content.className = 'comment-content';
-          content.textContent = comment.content;
-          const commentTime = document.createElement('time');
-          commentTime.className = 'comment-time';
-          commentTime.dateTime = comment.created_at;
-          commentTime.textContent = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(comment.created_at));
-          let deadlineLabel = null;
-          if (comment.due_date) {
-            deadlineLabel = document.createElement('span');
-            deadlineLabel.className = 'deadline-label comment-deadline';
-            deadlineLabel.textContent = `Due ${formatDeadline(comment.due_date)}`;
-          }
-          const commentActions = document.createElement('div');
-          commentActions.className = 'comment-actions';
-          const commentMenuButton = document.createElement('button');
-          commentMenuButton.className = 'comment-more-button';
-          commentMenuButton.type = 'button';
-          commentMenuButton.textContent = '⋮';
-          commentMenuButton.setAttribute('aria-label', 'Comment options');
-          const commentMenu = document.createElement('div');
-          commentMenu.className = 'comment-menu';
-          commentMenu.hidden = true;
-          commentMenuButton.addEventListener('click', () => {
-            const opening = commentMenu.hidden;
-            document.querySelectorAll('.comment-menu').forEach((other) => { other.hidden = true; });
-            commentMenu.hidden = !opening;
-            commentMenuButton.setAttribute('aria-expanded', String(opening));
-          });
-          const editComment = document.createElement('button');
-          editComment.className = 'menu-item';
-          editComment.type = 'button';
-          editComment.textContent = 'Edit comment';
-          editComment.addEventListener('click', () => {
-            state.editingCommentId = comment.id;
-            renderNotes();
-            document.querySelector(`#comment-edit-${CSS.escape(comment.id)}`)?.focus();
-          });
-          const deleteComment = document.createElement('button');
-          deleteComment.className = 'menu-item danger';
-          deleteComment.type = 'button';
-          deleteComment.textContent = 'Delete comment';
-          deleteComment.addEventListener('click', async () => {
-            deleteComment.disabled = true;
-            try {
-              await request('/api/comments', { method: 'DELETE', body: JSON.stringify({ id: comment.id }) });
-              state.comments = state.comments.filter((item) => item.id !== comment.id);
-              renderNotes();
-              toast('Comment deleted.');
-            } catch (error) {
-              toast(error.message);
-              deleteComment.disabled = false;
-            }
-          });
-          commentMenu.append(editComment, deleteComment);
-          commentActions.append(commentMenuButton, commentMenu);
-          if (state.editingCommentId === comment.id) {
-            const editForm = document.createElement('form');
-            editForm.className = 'comment-edit-form';
-            const editInput = document.createElement('input');
-            editInput.id = `comment-edit-${comment.id}`;
-            editInput.value = comment.content;
-            editInput.maxLength = 2000;
-            editInput.setAttribute('aria-label', 'Edit comment');
-            editInput.required = true;
-            const editDueDate = document.createElement('input');
-            editDueDate.type = 'date';
-            editDueDate.value = comment.due_date || '';
-            editDueDate.setAttribute('aria-label', 'Comment deadline');
-            const saveEdit = document.createElement('button');
-            saveEdit.type = 'submit';
-            saveEdit.textContent = 'Save';
-            const cancelEdit = document.createElement('button');
-            cancelEdit.type = 'button';
-            cancelEdit.className = 'cancel-edit';
-            cancelEdit.textContent = 'Cancel';
-            cancelEdit.addEventListener('click', () => { state.editingCommentId = null; renderNotes(); });
-            editForm.append(editInput, editDueDate, saveEdit, cancelEdit);
-            editForm.addEventListener('submit', async (event) => {
-              event.preventDefault();
-              saveEdit.disabled = true;
-              try {
-                const result = await request('/api/comments', { method: 'PATCH', body: JSON.stringify({ id: comment.id, content: editInput.value.trim(), due_date: editDueDate.value }) });
-                Object.assign(comment, result.comment);
-                state.editingCommentId = null;
-                renderNotes();
-                toast('Comment updated.');
-              } catch (error) {
-                toast(error.message);
-                saveEdit.disabled = false;
-              }
-            });
-            commentRow.append(dot, editForm, commentTime, commentActions);
-          } else {
-            commentRow.append(dot, content);
-            if (deadlineLabel) commentRow.append(deadlineLabel);
-            commentRow.append(commentTime, commentActions);
-          }
-          panel.append(commentRow);
-        }
-        if (state.activeCommentNoteId === note.id) {
-          const form = document.createElement('form');
-          form.className = 'comment-form';
-          const input = document.createElement('input');
-          input.id = `comment-input-${note.id}`;
-          input.name = 'content';
-          input.maxLength = 2000;
-          input.placeholder = 'Write a comment…';
-          input.setAttribute('aria-label', 'Write a comment');
-          input.required = true;
-          const dueDate = document.createElement('input');
-          dueDate.type = 'date';
-          dueDate.setAttribute('aria-label', 'Optional comment deadline');
-          const submit = document.createElement('button');
-          submit.type = 'submit';
-          submit.textContent = 'Comment';
-          form.append(input, dueDate, submit);
-          form.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            submit.disabled = true;
-            try {
-              const result = await request('/api/comments', { method: 'POST', body: JSON.stringify({ note_id: note.id, content: input.value.trim(), due_date: dueDate.value || null }) });
-              state.comments.push(result.comment);
-              renderNotes();
-              document.querySelector(`#comment-input-${CSS.escape(note.id)}`)?.focus();
-              toast('Comment added.');
-            } catch (error) {
-              toast(error.message);
-              submit.disabled = false;
-            }
-          });
-          panel.append(form);
-        }
-        dayBody.append(panel);
-      }
+// Note content is stored as light markdown: "- [ ] " and "- [x] " task lines, **bold**, *italic*, and \ escapes.
+// Asterisk runs toggle styles, so "***" flips both bold and italic at once.
+function parseInline(text) {
+  const runs = [];
+  let bold = false;
+  let italic = false;
+  let buffer = '';
+  const flush = () => {
+    if (buffer) runs.push({ text: buffer, bold, italic });
+    buffer = '';
+  };
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '\\' && i + 1 < text.length) {
+      buffer += text[i + 1];
+      i += 1;
+    } else if (text[i] !== '*') {
+      buffer += text[i];
+    } else {
+      let count = 1;
+      while (text[i + count] === '*') count += 1;
+      i += count - 1;
+      flush();
+      for (; count >= 3; count -= 3) { bold = !bold; italic = !italic; }
+      if (count === 2) bold = !bold;
+      if (count === 1) italic = !italic;
     }
-    list.append(group);
   }
-  $('#note-count').innerHTML = `YOUR NOTES <b>${total}</b>`;
-  $('#empty-state').hidden = total !== 0;
+  flush();
+  return runs;
+}
+
+function inlineMarkdown(segments) {
+  let out = '';
+  let bold = false;
+  let italic = false;
+  const toggle = (nextBold, nextItalic) => {
+    const marker = `${nextBold !== bold ? '**' : ''}${nextItalic !== italic ? '*' : ''}`;
+    bold = nextBold;
+    italic = nextItalic;
+    return marker;
+  };
+  for (const segment of segments) {
+    if (segment.text) out += toggle(segment.bold, segment.italic) + segment.text.replace(/[\\*]/g, '\\$&');
+  }
+  return out + toggle(false, false);
+}
+
+function buildLine({ task = false, checked = false, runs = [] } = {}) {
+  const line = document.createElement('div');
+  line.className = task ? 'line task' : 'line';
+  if (task) line.dataset.checked = String(checked);
+  for (const run of runs) {
+    let node = document.createTextNode(run.text);
+    if (run.italic) { const wrapper = document.createElement('i'); wrapper.append(node); node = wrapper; }
+    if (run.bold) { const wrapper = document.createElement('b'); wrapper.append(node); node = wrapper; }
+    line.append(node);
+  }
+  if (!line.textContent) line.replaceChildren(document.createElement('br'));
+  return line;
+}
+
+function contentToLines(content) {
+  return content.split('\n').map((raw) => {
+    const task = /^- \[( |x)\](?: |$)/i.exec(raw);
+    return buildLine({ task: Boolean(task), checked: task?.[1].toLowerCase() === 'x', runs: parseInline(task ? raw.slice(task[0].length) : raw) });
+  });
+}
+
+// Every direct child of the editor must be a line; wrap anything the browser left at the top level.
+function normalizeEditor(editor) {
+  const isLine = (node) => node.nodeType === Node.ELEMENT_NODE && node.classList.contains('line');
+  if (editor.firstChild && [...editor.childNodes].every(isLine)) return;
+  const selection = window.getSelection();
+  const caret = selection.rangeCount && editor.contains(selection.anchorNode) && selection.anchorNode !== editor ? [selection.anchorNode, selection.anchorOffset] : null;
+  let current = null;
+  for (const node of [...editor.childNodes]) {
+    if (node.nodeName === 'DIV') {
+      node.classList.add('line');
+      current = null;
+      continue;
+    }
+    if (!current) {
+      current = document.createElement('div');
+      current.className = 'line';
+      node.before(current);
+    }
+    current.append(node);
+  }
+  if (!editor.firstChild) editor.append(buildLine());
+  if (caret) try { selection.collapse(...caret); } catch (_) { /* The caret simply stays where the browser put it. */ }
+}
+
+// Styles come from the computed font so any markup the browser produced for bold or italic is captured.
+function lineSegments(line) {
+  const rows = [[]];
+  const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.nodeName === 'BR') rows.push([]);
+    else if (node.nodeType === Node.TEXT_NODE && node.data) {
+      const style = getComputedStyle(node.parentElement);
+      rows.at(-1).push({ text: node.data.replace(/ /g, ' '), bold: Number(style.fontWeight) >= 600, italic: style.fontStyle === 'italic' });
+    }
+  }
+  while (rows.length > 1 && !rows.at(-1).length) rows.pop();
+  return rows;
+}
+
+function serializeEditor(editor) {
+  normalizeEditor(editor);
+  const lines = [];
+  for (const line of editor.children) {
+    lineSegments(line).forEach((segments, index) => {
+      const text = inlineMarkdown(segments);
+      if (index === 0 && line.classList.contains('task')) lines.push(`- [${line.dataset.checked === 'true' ? 'x' : ' '}] ${text}`);
+      else lines.push(text.startsWith('- [') ? `\\${text}` : text);
+    });
+  }
+  return lines.join('\n').trim();
+}
+
+function caretLine(editor) {
+  const selection = window.getSelection();
+  if (!selection.rangeCount) return null;
+  const range = selection.getRangeAt(0);
+  let node = range.startContainer === editor ? editor.childNodes[range.startOffset] || editor.lastChild : range.startContainer;
+  while (node && node.parentNode !== editor) node = node.parentNode;
+  return node?.nodeType === Node.ELEMENT_NODE ? node : null;
+}
+
+function setLineTask(line, task) {
+  line.classList.toggle('task', task);
+  if (task) line.dataset.checked = 'false';
+  else delete line.dataset.checked;
+}
+
+// Enter splits the line itself so a new line keeps the checklist style but starts unchecked,
+// and Enter on an empty checklist line leaves the checklist instead.
+function splitLine(editor) {
+  const selection = window.getSelection();
+  if (!selection.rangeCount) return;
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  const line = caretLine(editor);
+  if (!line) return;
+  if (line.classList.contains('task') && !line.textContent) {
+    setLineTask(line, false);
+    return;
+  }
+  const tail = document.createRange();
+  tail.setStart(range.startContainer, range.startOffset);
+  tail.setEnd(line, line.childNodes.length);
+  const next = buildLine({ task: line.classList.contains('task') });
+  next.replaceChildren(tail.extractContents());
+  for (const part of [line, next]) if (!part.textContent) part.replaceChildren(document.createElement('br'));
+  line.after(next);
+  selection.collapse(next, 0);
+}
+
+function caretAtLineStart(line) {
+  const selection = window.getSelection();
+  if (!selection.isCollapsed) return false;
+  const before = document.createRange();
+  before.setStart(line, 0);
+  before.setEnd(selection.anchorNode, selection.anchorOffset);
+  return before.toString() === '';
+}
+
+function toggleChecklist(editor) {
+  const selection = window.getSelection();
+  if (!selection.rangeCount || !editor.contains(selection.anchorNode)) return;
+  const range = selection.getRangeAt(0);
+  const lines = [...editor.children].filter((line) => range.intersectsNode(line));
+  const makeTask = !lines.every((line) => line.classList.contains('task'));
+  lines.forEach((line) => setLineTask(line, makeTask));
+}
+
+function insertPlainText(editor, text) {
+  text.replace(/\r\n?/g, '\n').split('\n').forEach((part, index) => {
+    if (index) splitLine(editor);
+    if (part) document.execCommand('insertText', false, part);
+  });
+}
+
+// The canvas fills the board and grows to fit any note placed beyond the visible area.
+function fitCanvas() {
+  const canvas = $('#board-canvas');
+  let right = 0;
+  let bottom = 0;
+  for (const card of canvas.children) {
+    right = Math.max(right, card.offsetLeft + card.offsetWidth);
+    bottom = Math.max(bottom, card.offsetTop + card.offsetHeight);
+  }
+  canvas.style.width = `${right}px`;
+  canvas.style.height = `${bottom}px`;
+}
+
+function updateBoardMeta() {
+  const count = state.notes.length;
+  $('#note-count').textContent = `${count} ${count === 1 ? 'note' : 'notes'}`;
+  $('#empty-state').hidden = count !== 0;
+  fitCanvas();
+}
+
+async function saveNote(note, changes, { render = true, rerenderOnError = true, message = null } = {}) {
+  const keys = Object.keys(changes);
+  const previous = Object.fromEntries(keys.map((key) => [key, note[key]]));
+  Object.assign(note, changes);
+  if (render) renderNote(note);
+  try {
+    const result = await request('/api/notes', { method: 'PATCH', body: JSON.stringify({ id: note.id, ...changes }) });
+    for (const key of keys) note[key] = result.note[key];
+    if (message) toast(message);
+  } catch (error) {
+    Object.assign(note, previous);
+    if (rerenderOnError && state.notes.includes(note)) renderNote(note);
+    toast(error.message);
+  }
+}
+
+function startTitleEdit(note) {
+  state.editingTitleId = note.id;
+  const input = renderNote(note).querySelector('.sticky-title-input');
+  input?.focus();
+  input?.select();
+}
+
+function confirmDelete(note) {
+  state.pendingDeleteId = note.id;
+  $('#delete-copy').textContent = `“${note.title || 'Untitled'}” will be removed permanently and can’t be restored.`;
+  const dialog = $('#delete-dialog');
+  dialog.returnValue = '';
+  dialog.showModal();
+}
+
+function startDrag(event, note, card) {
+  if (event.button !== 0 || !event.target.closest('.sticky-header, .sticky-footer')) return;
+  if (event.target.closest('input, textarea, button, form, .note-menu, .resize-handle')) return;
+  const canvas = $('#board-canvas');
+  const start = { x: event.clientX, y: event.clientY, left: note.pos_x, top: note.pos_y };
+  let moved = false;
+  const move = (moveEvent) => {
+    if (moveEvent.pointerId !== event.pointerId) return;
+    const dx = moveEvent.clientX - start.x;
+    const dy = moveEvent.clientY - start.y;
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    if (!moved) {
+      moved = true;
+      closeNoteMenus();
+      card.classList.add('dragging');
+      document.body.classList.add('is-dragging');
+    }
+    card.style.left = `${clamp(Math.round(start.left + dx), 0, canvas.offsetWidth - card.offsetWidth)}px`;
+    card.style.top = `${clamp(Math.round(start.top + dy), 0, canvas.offsetHeight - card.offsetHeight)}px`;
+  };
+  const end = (endEvent) => {
+    if (endEvent.pointerId !== event.pointerId) return;
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    card.classList.remove('dragging');
+    document.body.classList.remove('is-dragging');
+    if (!moved) return;
+    const pos_x = parseInt(card.style.left, 10);
+    const pos_y = parseInt(card.style.top, 10);
+    if (pos_x === start.left && pos_y === start.top) return;
+    saveNote(note, { pos_x, pos_y, z_index: note.z_index }, { render: false });
+    fitCanvas();
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', end);
+  window.addEventListener('pointercancel', end);
+}
+
+function startResize(event, note, card) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  const canvas = $('#board-canvas');
+  const start = { x: event.clientX, y: event.clientY, width: card.offsetWidth, height: card.offsetHeight };
+  card.classList.add('resizing', 'sized');
+  document.body.classList.add('is-resizing');
+  const move = (moveEvent) => {
+    if (moveEvent.pointerId !== event.pointerId) return;
+    card.style.width = `${clamp(Math.round(start.width + moveEvent.clientX - start.x), 180, Math.min(1200, canvas.offsetWidth - note.pos_x))}px`;
+    card.style.height = `${clamp(Math.round(start.height + moveEvent.clientY - start.y), 120, 1200)}px`;
+  };
+  const end = (endEvent) => {
+    if (endEvent.pointerId !== event.pointerId) return;
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', end);
+    window.removeEventListener('pointercancel', end);
+    card.classList.remove('resizing');
+    document.body.classList.remove('is-resizing');
+    const width = card.offsetWidth;
+    const height = card.offsetHeight;
+    if (width === start.width && height === start.height) {
+      if (!note.height) {
+        card.classList.remove('sized');
+        card.style.height = '';
+      }
+      return;
+    }
+    saveNote(note, { width, height }, { render: false });
+    fitCanvas();
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', end);
+  window.addEventListener('pointercancel', end);
+}
+
+function buildNoteCard(note) {
+  const card = document.createElement('article');
+  card.className = `sticky-note color-${note.color}${note.completed ? ' completed' : ''}${note.collapsed ? ' collapsed' : ''}`;
+  card.dataset.id = note.id;
+  card.style.left = `${note.pos_x}px`;
+  card.style.top = `${note.pos_y}px`;
+  card.style.zIndex = note.z_index;
+  // Notes without a saved size keep the default width and grow with their content.
+  if (note.width) card.style.width = `${note.width}px`;
+  if (note.height && !note.collapsed) {
+    card.style.height = `${note.height}px`;
+    card.classList.add('sized');
+  }
+  card.setAttribute('aria-label', note.title || 'Untitled note');
+  card.addEventListener('pointerdown', (event) => {
+    bringToFront(note, card);
+    startDrag(event, note, card);
+  });
+  card.addEventListener('focusin', () => bringToFront(note, card));
+
+  const header = document.createElement('header');
+  header.className = 'sticky-header';
+  const checkbox = document.createElement('input');
+  checkbox.className = 'note-checkbox';
+  checkbox.type = 'checkbox';
+  checkbox.checked = note.completed;
+  checkbox.setAttribute('aria-label', note.completed ? 'Mark note active' : 'Mark note complete');
+  checkbox.addEventListener('change', () => {
+    const changes = { completed: checkbox.checked };
+    // Completing the note ticks every checklist line in it; reopening leaves the lines as they are.
+    const ticked = note.content.split('\n').map((line) => line.replace(/^- \[ \](?= |$)/, '- [x]')).join('\n');
+    if (checkbox.checked && ticked !== note.content) changes.content = ticked;
+    saveNote(note, changes);
+  });
+
+  let title;
+  if (state.editingTitleId === note.id) {
+    title = document.createElement('input');
+    title.className = 'sticky-title-input';
+    title.value = note.title;
+    title.maxLength = 120;
+    title.placeholder = 'Untitled';
+    title.setAttribute('aria-label', 'Note title');
+    let cancelled = false;
+    title.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); title.blur(); }
+      if (event.key === 'Escape') { cancelled = true; title.blur(); }
+    });
+    title.addEventListener('blur', () => {
+      if (state.editingTitleId !== note.id) return;
+      state.editingTitleId = null;
+      const value = title.value.trim();
+      if (cancelled || value === note.title) renderNote(note);
+      else saveNote(note, { title: value });
+    });
+  } else {
+    title = document.createElement('h3');
+    title.className = `sticky-title${note.title ? '' : ' placeholder'}`;
+    title.textContent = note.title || 'Untitled';
+    title.title = 'Double-click to rename · drag to move';
+    title.addEventListener('dblclick', () => startTitleEdit(note));
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'note-actions';
+  const menuButton = document.createElement('button');
+  menuButton.className = 'more-button';
+  menuButton.type = 'button';
+  menuButton.textContent = '⋮';
+  menuButton.setAttribute('aria-label', 'Note options');
+  menuButton.setAttribute('aria-expanded', 'false');
+  const menu = document.createElement('div');
+  menu.className = 'note-menu';
+  menu.hidden = true;
+  menuButton.addEventListener('click', () => {
+    const opening = menu.hidden;
+    closeNoteMenus();
+    menu.hidden = !opening;
+    menuButton.setAttribute('aria-expanded', String(opening));
+  });
+  const swatches = document.createElement('div');
+  swatches.className = 'color-swatches';
+  swatches.setAttribute('role', 'group');
+  swatches.setAttribute('aria-label', 'Note color');
+  for (const color of NOTE_COLORS) {
+    const swatch = document.createElement('button');
+    swatch.className = `swatch color-${color}`;
+    swatch.type = 'button';
+    swatch.setAttribute('aria-label', `${color.charAt(0).toUpperCase()}${color.slice(1)}`);
+    swatch.setAttribute('aria-pressed', String(color === note.color));
+    swatch.addEventListener('click', () => {
+      closeNoteMenus();
+      if (color !== note.color) saveNote(note, { color });
+    });
+    swatches.append(swatch);
+  }
+  const rename = document.createElement('button');
+  rename.className = 'menu-item';
+  rename.type = 'button';
+  rename.textContent = 'Rename';
+  rename.addEventListener('click', () => startTitleEdit(note));
+  const editDeadline = document.createElement('button');
+  editDeadline.className = 'menu-item';
+  editDeadline.type = 'button';
+  editDeadline.textContent = note.due_date ? 'Edit deadline' : 'Set deadline';
+  editDeadline.addEventListener('click', () => {
+    state.editingDeadlineNoteId = note.id;
+    renderNote(note).querySelector('.deadline-edit-form input')?.focus();
+  });
+  const deleteNote = document.createElement('button');
+  deleteNote.className = 'menu-item danger';
+  deleteNote.type = 'button';
+  deleteNote.textContent = 'Delete note';
+  deleteNote.addEventListener('click', () => {
+    closeNoteMenus();
+    confirmDelete(note);
+  });
+  menu.append(swatches, rename, editDeadline, deleteNote);
+  actions.append(menuButton, menu);
+  const collapse = document.createElement('button');
+  collapse.className = 'collapse-button';
+  collapse.type = 'button';
+  collapse.title = note.collapsed ? 'Expand note' : 'Collapse note';
+  collapse.setAttribute('aria-label', collapse.title);
+  collapse.setAttribute('aria-expanded', String(!note.collapsed));
+  collapse.addEventListener('click', () => saveNote(note, { collapsed: !note.collapsed }));
+  header.append(checkbox, title, collapse, actions);
+
+  const content = document.createElement('div');
+  content.className = 'sticky-content';
+  content.contentEditable = 'true';
+  content.spellcheck = true;
+  content.dataset.placeholder = 'Write something…';
+  content.setAttribute('role', 'textbox');
+  content.setAttribute('aria-multiline', 'true');
+  content.setAttribute('aria-label', 'Note content');
+  content.append(...contentToLines(note.content));
+  const isEmpty = () => content.children.length <= 1 && !content.textContent && !content.querySelector('.task');
+  content.classList.toggle('is-empty', isEmpty());
+  const afterEdit = () => {
+    normalizeEditor(content);
+    content.classList.toggle('is-empty', isEmpty());
+    fitCanvas();
+  };
+  // Keep the typed text in place if saving fails, so the next commit retries it.
+  let commitTimer = null;
+  const commit = () => {
+    clearTimeout(commitTimer);
+    const value = serializeEditor(content);
+    if (value !== note.content) saveNote(note, { content: value }, { render: false, rerenderOnError: false });
+  };
+  content.addEventListener('focus', () => card.classList.add('editing'));
+  content.addEventListener('blur', () => {
+    card.classList.remove('editing');
+    commit();
+  });
+  content.addEventListener('input', afterEdit);
+  content.addEventListener('beforeinput', (event) => {
+    if (event.isComposing) return;
+    if (event.inputType === 'insertParagraph' || event.inputType === 'insertLineBreak') {
+      event.preventDefault();
+      splitLine(content);
+      afterEdit();
+    } else if (event.inputType === 'deleteContentBackward') {
+      const line = caretLine(content);
+      if (!line?.classList.contains('task') || !caretAtLineStart(line)) return;
+      event.preventDefault();
+      setLineTask(line, false);
+      afterEdit();
+    } else if (event.inputType === 'insertFromDrop' || (event.inputType.startsWith('format') && !['formatBold', 'formatItalic'].includes(event.inputType))) {
+      event.preventDefault();
+    }
+  });
+  content.addEventListener('paste', (event) => {
+    event.preventDefault();
+    insertPlainText(content, event.clipboardData.getData('text/plain'));
+    afterEdit();
+  });
+  content.addEventListener('keydown', (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    if (key === 'b' || key === 'i') {
+      event.preventDefault();
+      document.execCommand(key === 'b' ? 'bold' : 'italic');
+    } else if (key === 'enter') {
+      const line = caretLine(content);
+      if (!line?.classList.contains('task')) return;
+      event.preventDefault();
+      line.dataset.checked = String(line.dataset.checked !== 'true');
+    }
+  });
+  // Line checkboxes are drawn in each task line's left padding.
+  const checkboxLine = (event) => {
+    const line = event.target.closest?.('.line.task');
+    return line && content.contains(line) && event.clientX - line.getBoundingClientRect().left < 20 ? line : null;
+  };
+  content.addEventListener('mousedown', (event) => { if (checkboxLine(event)) event.preventDefault(); });
+  content.addEventListener('click', (event) => {
+    const line = checkboxLine(event);
+    if (!line) return;
+    line.dataset.checked = String(line.dataset.checked !== 'true');
+    // Batch quick successive ticks into one save; the API blocks bursts of requests.
+    clearTimeout(commitTimer);
+    commitTimer = setTimeout(commit, 700);
+  });
+  card.append(header, content);
+
+  if (state.editingDeadlineNoteId === note.id) {
+    const deadlineForm = document.createElement('form');
+    deadlineForm.className = 'deadline-edit-form';
+    const dateInput = document.createElement('input');
+    dateInput.type = 'date';
+    dateInput.value = note.due_date || '';
+    dateInput.setAttribute('aria-label', 'Note deadline');
+    const saveDeadline = document.createElement('button');
+    saveDeadline.type = 'submit';
+    saveDeadline.textContent = 'Save';
+    const cancelDeadline = document.createElement('button');
+    cancelDeadline.type = 'button';
+    cancelDeadline.className = 'cancel-edit';
+    cancelDeadline.textContent = 'Cancel';
+    cancelDeadline.addEventListener('click', () => { state.editingDeadlineNoteId = null; renderNote(note); });
+    deadlineForm.append(dateInput, saveDeadline, cancelDeadline);
+    deadlineForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      state.editingDeadlineNoteId = null;
+      saveNote(note, { due_date: dateInput.value }, { message: dateInput.value ? 'Deadline updated.' : 'Deadline removed.' });
+    });
+    card.append(deadlineForm);
+  }
+
+  const footer = document.createElement('footer');
+  footer.className = 'sticky-footer';
+  const formatBar = document.createElement('div');
+  formatBar.className = 'format-bar';
+  for (const [name, text, hint, action] of [
+    ['bold', 'B', 'Bold (Ctrl+B)', () => document.execCommand('bold')],
+    ['italic', 'I', 'Italic (Ctrl+I)', () => document.execCommand('italic')],
+    ['checklist', '☑', 'Checklist (Ctrl+Enter ticks a line)', () => toggleChecklist(content)],
+  ]) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `format-button format-${name}`;
+    button.tabIndex = -1;
+    button.textContent = text;
+    button.title = hint;
+    button.setAttribute('aria-label', hint);
+    // Keep focus and the selection in the editor while formatting.
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => { action(); afterEdit(); });
+    formatBar.append(button);
+  }
+  footer.append(formatBar);
+  if (note.due_date) {
+    const deadline = document.createElement('span');
+    deadline.className = `deadline-label${!note.completed && note.due_date < dateKey(new Date()) ? ' overdue' : ''}`;
+    deadline.textContent = `Due ${formatDeadline(note.due_date)}`;
+    footer.append(deadline);
+    footer.classList.add('has-deadline');
+  }
+  const time = document.createElement('time');
+  time.className = 'sticky-time';
+  time.dateTime = note.created_at;
+  time.textContent = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(note.created_at));
+  footer.append(time);
+  const resize = document.createElement('span');
+  resize.className = 'resize-handle';
+  resize.title = 'Drag to resize';
+  resize.setAttribute('aria-hidden', 'true');
+  resize.addEventListener('pointerdown', (event) => startResize(event, note, card));
+  card.append(footer, resize);
+  return card;
+}
+
+function renderNote(note) {
+  const card = buildNoteCard(note);
+  const existing = noteCard(note.id);
+  if (existing) existing.replaceWith(card);
+  else $('#board-canvas').append(card);
+  updateBoardMeta();
+  return card;
+}
+
+function renderBoard() {
+  const canvas = $('#board-canvas');
+  canvas.replaceChildren(...state.notes.map(buildNoteCard));
+  updateBoardMeta();
+}
+
+async function createNote(position) {
+  const board = $('#dashboard');
+  const cascade = (state.notes.length % 8) * 28;
+  const x = position ? position.x : board.scrollLeft + 40 + cascade;
+  const y = position ? position.y : board.scrollTop + 32 + cascade;
+  const button = $('#new-note');
+  button.disabled = true;
+  try {
+    const data = await request('/api/notes', { method: 'POST', body: JSON.stringify({
+      title: '', content: '', color: NOTE_COLORS[state.notes.length % NOTE_COLORS.length],
+      pos_x: clamp(Math.round(x), 0, board.scrollLeft + board.clientWidth - NOTE_WIDTH),
+      pos_y: clamp(Math.round(y), 0, 100000),
+    }) });
+    state.notes.unshift(data.note);
+    startTitleEdit(data.note);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function displayDashboard(username) {
@@ -573,15 +871,13 @@ function displayDashboard(username) {
   $('#nav-signin').hidden = true;
   $('#nav-username').textContent = username;
   $('#avatar').textContent = username.charAt(0).toUpperCase();
-  $('#greeting').textContent = `Hello, ${username}.`;
-  $('#today-label').textContent = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date()).toUpperCase();
 }
 
 async function loadNotes() {
-  const [result, commentResult] = await Promise.all([request('/api/notes'), request('/api/comments')]);
-  state.notes = result.notes;
-  state.comments = commentResult.comments;
-  renderNotes();
+  const result = await request('/api/notes');
+  state.notes = result.notes.map((note) => ({ title: '', color: 'yellow', pos_x: null, pos_y: null, z_index: 0, collapsed: false, width: null, height: null, ...note }));
+  placeUnpositionedNotes();
+  renderBoard();
 }
 
 document.querySelectorAll('.auth-tab').forEach((tab) => tab.addEventListener('click', () => setMode(tab.dataset.mode)));
@@ -603,26 +899,26 @@ $('#auth-form').addEventListener('submit', async (event) => {
   }
 });
 
-$('#note-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const input = $('#note-content');
-  const dueDate = $('#note-due-date');
-  const button = $('#add-note');
-  const content = input.value.trim();
-  if (!content) return;
-  button.disabled = true;
+$('#new-note').addEventListener('click', () => createNote());
+$('#board-canvas').addEventListener('dblclick', (event) => {
+  if (event.target !== event.currentTarget) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  createNote({ x: event.clientX - rect.left - 24, y: event.clientY - rect.top - 18 });
+});
+
+$('#delete-dialog').addEventListener('click', (event) => { if (event.target === $('#delete-dialog')) $('#delete-dialog').close(); });
+$('#delete-dialog').addEventListener('close', async () => {
+  const note = state.notes.find((item) => item.id === state.pendingDeleteId);
+  state.pendingDeleteId = null;
+  if ($('#delete-dialog').returnValue !== 'delete' || !note) return;
   try {
-    const data = await request('/api/notes', { method: 'POST', body: JSON.stringify({ content, due_date: dueDate.value || null }) });
-    state.notes.unshift(data.note);
-    renderNotes();
-    input.value = '';
-    dueDate.value = '';
-    input.focus();
-    toast('Note added.');
+    await request('/api/notes', { method: 'DELETE', body: JSON.stringify({ id: note.id }) });
+    state.notes = state.notes.filter((item) => item.id !== note.id);
+    noteCard(note.id)?.remove();
+    updateBoardMeta();
+    toast('Note deleted.');
   } catch (error) {
     toast(error.message);
-  } finally {
-    button.disabled = false;
   }
 });
 
@@ -630,25 +926,16 @@ $('#account-button').addEventListener('click', () => { $('#account-menu').hidden
 $('#theme-toggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme !== 'dark'));
 document.addEventListener('click', (event) => {
   if (!event.target.closest('.signed-in-nav')) $('#account-menu').hidden = true;
-  if (!event.target.closest('.note-actions')) {
-    document.querySelectorAll('.note-menu').forEach((menu) => { menu.hidden = true; });
-    document.querySelectorAll('.more-button').forEach((button) => button.setAttribute('aria-expanded', 'false'));
-  }
-  if (!event.target.closest('.comment-actions')) {
-    document.querySelectorAll('.comment-menu').forEach((menu) => { menu.hidden = true; });
-    document.querySelectorAll('.comment-more-button').forEach((button) => button.setAttribute('aria-expanded', 'false'));
-  }
+  if (!event.target.closest('.note-actions')) closeNoteMenus();
 });
 
 $('#signout-button').addEventListener('click', async () => {
   try { await request('/api/auth', { method: 'DELETE' }); } catch (_) { /* The local view still needs to clear. */ }
   state.username = null;
   state.notes = [];
-  state.comments = [];
-  state.activeCommentNoteId = null;
-  state.editingCommentId = null;
+  state.editingTitleId = null;
   state.editingDeadlineNoteId = null;
-  state.collapsedComments.clear();
+  $('#board-canvas').replaceChildren();
   $('#signed-in-nav').hidden = true;
   $('#nav-signin').hidden = false;
   $('#dashboard').hidden = true;
