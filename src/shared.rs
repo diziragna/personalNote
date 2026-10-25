@@ -103,6 +103,16 @@ pub fn parse_due_date(value: Option<&str>) -> Result<Option<chrono::NaiveDate>, 
     }
 }
 
+pub const NOTE_COLORS: [&str; 6] = ["yellow", "pink", "blue", "green", "purple", "orange"];
+
+pub fn valid_color(color: &str) -> bool { NOTE_COLORS.contains(&color) }
+
+pub fn valid_position(value: i32) -> bool { (0..=100_000).contains(&value) }
+
+pub fn valid_width(value: i32) -> bool { (180..=1200).contains(&value) }
+
+pub fn valid_height(value: i32) -> bool { (120..=1200).contains(&value) }
+
 pub fn unauthorized() -> Result<Response<ResponseBody>, Error> { error(401, "Please sign in to continue.") }
 
 pub fn session_cookie_response(status: u16, payload: Value, token: &str) -> Result<Response<ResponseBody>, Error> {
@@ -114,9 +124,16 @@ pub fn session_cookie_response(status: u16, payload: Value, token: &str) -> Resu
 #[derive(Deserialize)]
 pub struct ChangeCredentials { pub current_password: String, pub username: String, pub new_password: Option<String> }
 #[derive(Deserialize)]
-pub struct NewNote { pub content: String, pub due_date: Option<String> }
+pub struct NewNote {
+    #[serde(default)] pub title: String, #[serde(default)] pub content: String, pub color: Option<String>,
+    pub pos_x: Option<i32>, pub pos_y: Option<i32>, pub due_date: Option<String>
+}
 #[derive(Deserialize)]
-pub struct UpdateNote { pub id: Uuid, pub content: Option<String>, pub completed: Option<bool>, pub due_date: Option<String> }
+pub struct UpdateNote {
+    pub id: Uuid, pub title: Option<String>, pub content: Option<String>, pub color: Option<String>, pub completed: Option<bool>,
+    pub due_date: Option<String>, pub pos_x: Option<i32>, pub pos_y: Option<i32>, pub z_index: Option<i32>,
+    pub collapsed: Option<bool>, pub width: Option<i32>, pub height: Option<i32>
+}
 #[derive(Deserialize)]
 pub struct DeleteNote { pub id: Uuid }
 #[derive(Deserialize)]

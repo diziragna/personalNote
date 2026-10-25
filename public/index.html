@@ -17,6 +17,8 @@
       <a class="brand" href="/" aria-label="Daynote home"><span class="brand-mark">d.</span><span>daynote</span></a>
       <span id="local-badge" class="local-badge" hidden>LOCAL PREVIEW · THIS BROWSER ONLY</span>
       <div id="signed-in-nav" class="signed-in-nav" hidden>
+        <span id="note-count" class="note-count">0 notes</span>
+        <button id="new-note" class="new-note-button" type="button"><span>＋</span> New note</button>
         <button id="account-button" class="account-button" aria-label="Account settings"><span id="avatar" class="avatar">D</span><span id="nav-username"></span><span class="chevron">⌄</span></button>
         <div id="account-menu" class="account-menu" hidden>
           <button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">☾ &nbsp; Dark mode</button>
@@ -63,21 +65,9 @@
         </div>
       </section>
 
-      <section id="dashboard" class="dashboard" hidden>
-        <div class="dashboard-heading">
-          <div><p class="eyebrow muted"><span class="eyebrow-dot"></span> YOUR PERSONAL NOTEBOOK</p><h1 id="greeting">A fresh page.</h1><p class="dashboard-subtitle">A place for the things on your mind.</p></div>
-          <div class="date-chip"><span class="date-chip-icon">◷</span><span id="today-label"></span></div>
-        </div>
-        <form id="note-form" class="composer">
-          <span class="composer-plus">＋</span>
-          <input id="note-content" name="content" maxlength="2000" placeholder="Write down a thought, a task, anything…" aria-label="New note" required>
-          <input id="note-due-date" name="due_date" type="date" aria-label="Optional note deadline" title="Optional deadline">
-          <button id="add-note" type="submit">Add note <span>↗</span></button>
-        </form>
-        <div class="note-toolbar"><span id="note-count">YOUR NOTES <b>0</b></span><span class="toolbar-hint"><span class="mini-check">✓</span> Check it off when it’s done</span></div>
-        <div id="notes-list" class="notes-list"></div>
-        <div id="empty-state" class="empty-state" hidden><div class="empty-illustration"><span>✳</span><i></i><b></b></div><h3>A clear page feels good.</h3><p>Add your first note above. It’ll be right here when you need it.</p></div>
-        <footer class="dashboard-footer"><span>Made for the little things.</span><span>✳ &nbsp; daynote</span></footer>
+      <section id="dashboard" class="board" aria-label="Sticky note board" hidden>
+        <div id="board-canvas" class="board-canvas"></div>
+        <div id="empty-state" class="empty-state" hidden><div class="empty-illustration"><span>✳</span><i></i><b></b></div><h3>A clear board feels good.</h3><p>Press <b>New note</b> or double-click anywhere to stick your first note.</p></div>
       </section>
     </main>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -91,6 +81,13 @@
         <label for="new-password">New password <span class="optional">optional</span></label><input id="new-password" type="password" minlength="8" autocomplete="new-password" placeholder="Leave blank to keep your password">
         <p id="settings-error" class="form-error" role="alert" hidden></p>
         <button id="save-settings" type="submit" class="primary-button">Save changes <span class="button-arrow">→</span></button>
+      </form>
+    </dialog>
+
+    <dialog id="delete-dialog" class="settings-dialog">
+      <form method="dialog" class="settings-card confirm-card">
+        <div class="auth-icon danger-icon">!</div><h2>Delete this note?</h2><p id="delete-copy" class="settings-copy">It will be removed permanently and can’t be restored.</p>
+        <div class="confirm-actions"><button value="cancel" class="secondary-button">Cancel</button><button value="delete" class="danger-button">Delete permanently</button></div>
       </form>
     </dialog>
   </div>
