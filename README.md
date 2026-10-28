@@ -30,6 +30,16 @@ For a database-free local preview, run `npm install` once and `npm run dev`, the
 
 To test the Rust API against Neon before deploying, install the Vercel CLI, copy `.env.example` to `.env.local`, set `DATABASE_URL`, apply the migration, and run `vercel dev`. `.env.local` is ignored by Git.
 
+## Browser extension
+
+[`extension/`](extension/) is a popup for Chrome and Firefox (Manifest V3, no build step). It lists your notes collapsed to their title and deadline, sorted with open notes first and the soonest deadline first. Click a note to expand it; opening another closes the first. The search box matches every word against note titles, content, and deadlines (`2026-11`, `Nov 3`, or `overdue`). The popup has no background script, shows the last loaded notes instantly from extension storage, and makes one `GET /api/notes` request each time it opens.
+
+1. Set your deployment's address in `host_permissions` in [`extension/manifest.json`](extension/manifest.json), for example `"https://your-app.vercel.app/*"`. The popup reads the API address from there.
+2. Chrome: open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and choose the `extension` folder.
+3. Firefox (128+): open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on…**, and choose `extension/manifest.json`. A temporary add-on is removed when Firefox restarts; to keep it installed, sign it through addons.mozilla.org (unlisted is fine).
+
+Sign in with your Daynote account. The extension uses its own session token, so signing out of the extension does not sign you out of the web app.
+
 ## API
 
 - `GET /api/auth` — current signed-in account.
