@@ -7,7 +7,10 @@ use vercel_runtime::{run, service_fn, Error, Request, Response, ResponseBody};
 use shared::*;
 
 #[derive(Deserialize)]
-struct AuthInput { action: String, username: Option<String>, password: Option<String>, current_password: Option<String>, new_password: Option<String> }
+struct AuthInput {
+    action: String, username: Option<String>, password: Option<String>, current_password: Option<String>, new_password: Option<String>,
+    #[serde(default)] return_token: bool
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> { run(service_fn(handler)).await }
@@ -34,7 +37,7 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
                     if e.as_database_error().is_some_and(|e| e.is_unique_violation()) { return error(409, "That username is already taken.") }
                     return Err(e.into());
                 }
-                create_session(&db, name).await
+                create_session(&db, name, input.return_token).await
             }
             "signin" => {
                 let name = input.username.unwrap_or_default().trim().to_ascii_lowercase();
@@ -50,7 +53,7 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
                 }
                 sqlx::query("UPDATE users SET failed_login_attempts = 0 WHERE id = $1 AND failed_login_attempts <> 0")
                     .bind(row.get::<uuid::Uuid, _>("id")).execute(&db).await?;
-                create_session(&db, row.get("username")).await
+                create_session(&db, row.get("username"), input.return_token).await
             }
             _ => error(400, "Unknown action.")
         }
@@ -87,9 +90,12 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
     } else { error(405, "Method not allowed.") }
 }
 
-async fn create_session(db: &sqlx::PgPool, username: String) -> Result<Response<ResponseBody>, Error> {
+/// Browser sessions get an HttpOnly cookie; clients that asked for `return_token`
+/// (extension, desktop app) get the token in the body to send as a Bearer header.
+async fn create_session(db: &sqlx::PgPool, username: String, return_token: bool) -> Result<Response<ResponseBody>, Error> {
     let raw = token();
     sqlx::query("INSERT INTO sessions (user_id, token_hash, expires_at) SELECT id, $2, now() + interval '30 days' FROM users WHERE username=$1")
         .bind(&username).bind(token_hash(&raw)).execute(db).await?;
+    if return_token { return response(200, json!({"username": username, "token": raw})) }
     session_cookie_response(200, json!({"username": username}), &raw)
 }

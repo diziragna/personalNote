@@ -19,7 +19,7 @@ A small personal notes app with a Rust serverless API, a static browser UI, and 
 ## Set up Neon
 
 1. Create a Neon project and copy its pooled connection string.
-2. Run [`migrations/0001_init.sql`](migrations/0001_init.sql), [`migrations/0002_abuse_controls.sql`](migrations/0002_abuse_controls.sql), [`migrations/0003_deadlines.sql`](migrations/0003_deadlines.sql), [`migrations/0004_sticky_notes.sql`](migrations/0004_sticky_notes.sql), and [`migrations/0005_note_layout.sql`](migrations/0005_note_layout.sql) in order against the Neon database using the Neon SQL Editor or `psql`.
+2. Run [`migrations/0001_init.sql`](migrations/0001_init.sql), [`migrations/0002_abuse_controls.sql`](migrations/0002_abuse_controls.sql), [`migrations/0003_deadlines.sql`](migrations/0003_deadlines.sql), [`migrations/0004_sticky_notes.sql`](migrations/0004_sticky_notes.sql), [`migrations/0005_note_layout.sql`](migrations/0005_note_layout.sql), and [`migrations/0006_temporary_ip_blocks.sql`](migrations/0006_temporary_ip_blocks.sql) in order against the Neon database using the Neon SQL Editor or `psql`.
 3. Set `DATABASE_URL` to the connection string. Keep `sslmode=require` enabled.
 
 ## Run and deploy
@@ -33,7 +33,7 @@ To test the Rust API against Neon before deploying, install the Vercel CLI, copy
 ## API
 
 - `GET /api/auth` — current signed-in account.
-- `POST /api/auth` — JSON `{ "action": "signup" | "signin", "username": "…", "password": "…" }`.
+- `POST /api/auth` — JSON `{ "action": "signup" | "signin", "username": "…", "password": "…" }`. Add `"return_token": true` to get `{ "username": "…", "token": "…" }` instead of a session cookie.
 - `PATCH /api/auth` — update credentials with `{ "username": "…", "current_password": "…", "new_password": "…" }`; `new_password` is optional.
 - `DELETE /api/auth` — sign out and revoke the session.
 - `GET /api/notes` — list the current user’s notes.
@@ -44,5 +44,9 @@ To test the Rust API against Neon before deploying, install the Vercel CLI, copy
 - `POST /api/comments` — JSON `{ "note_id": "…", "content": "…" }`.
 - `PATCH /api/comments` — JSON `{ "id": "…", "content": "…" }`.
 - `DELETE /api/comments` — JSON `{ "id": "…" }`.
+
+Every endpoint accepts the session either as the `note_session` cookie (web app) or as an `Authorization: Bearer <token>` header (browser extension, desktop app); the header wins when both are sent.
+
+An IP that sends more than 5 requests in one second is blocked for 24 hours. If it does so again after that block ends, it is blocked permanently.
 
 Usernames are 3–24 ASCII letters, numbers, underscores, or hyphens. Passwords must be 8–128 characters. Note titles are limited to 120 characters and note content to 2,000 characters. Colors are `yellow`, `pink`, `blue`, `green`, `purple`, or `orange`; positions are pixels from 0 to 100,000; note widths are 180–1,200 pixels and heights 120–1,200 pixels.
