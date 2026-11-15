@@ -8,6 +8,10 @@ use std::env;
 use vercel_runtime::{Error, Request, Response, ResponseBody};
 use uuid::Uuid;
 
+#[path = "rules.rs"]
+mod rules;
+pub use rules::*;
+
 pub async fn pool() -> Result<PgPool, Error> {
     let url = env::var("DATABASE_URL").map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "DATABASE_URL is not configured"))?;
     Ok(PgPoolOptions::new().max_connections(3).connect(&url).await?)
@@ -99,29 +103,6 @@ pub async fn user_id(pool: &PgPool, req: &Request) -> Result<Option<Uuid>, sqlx:
         .bind(token_hash(&raw)).fetch_optional(pool).await
 }
 
-pub fn valid_username(name: &str) -> bool {
-    (3..=24).contains(&name.len()) && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
-}
-
-pub fn valid_password(password: &str) -> bool { (8..=128).contains(&password.len()) }
-
-pub fn parse_due_date(value: Option<&str>) -> Result<Option<chrono::NaiveDate>, ()> {
-    match value {
-        None | Some("") => Ok(None),
-        Some(value) => chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map(Some).map_err(|_| ()),
-    }
-}
-
-pub const NOTE_COLORS: [&str; 6] = ["yellow", "pink", "blue", "green", "purple", "orange"];
-
-pub fn valid_color(color: &str) -> bool { NOTE_COLORS.contains(&color) }
-
-pub fn valid_position(value: i32) -> bool { (0..=100_000).contains(&value) }
-
-pub fn valid_width(value: i32) -> bool { (180..=1200).contains(&value) }
-
-pub fn valid_height(value: i32) -> bool { (120..=1200).contains(&value) }
-
 pub fn unauthorized() -> Result<Response<ResponseBody>, Error> { error(401, "Please sign in to continue.") }
 
 pub const NOTE_COLUMNS: &str = "id, title, content, color, completed, due_date, pos_x, pos_y, z_index, collapsed, width, height, created_at, updated_at";
@@ -136,15 +117,6 @@ pub fn note_json(r: &PgRow) -> Value {
         "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),
         "updated_at": r.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")
     })
-}
-
-/// Returns an error message when any provided field is out of range.
-pub fn invalid_fields(title: Option<&str>, content: Option<&str>, color: Option<&str>, positions: &[Option<i32>]) -> Option<&'static str> {
-    if title.is_some_and(|t| t.trim().chars().count() > 120) { return Some("A title can be at most 120 characters.") }
-    if content.is_some_and(|c| c.trim().chars().count() > 2000) { return Some("A note can be at most 2,000 characters.") }
-    if color.is_some_and(|c| !valid_color(c)) { return Some("Choose one of the available note colors.") }
-    if positions.iter().flatten().any(|&v| !valid_position(v)) { return Some("That note position is out of range.") }
-    None
 }
 
 pub fn session_cookie_response(status: u16, payload: Value, token: &str) -> Result<Response<ResponseBody>, Error> {
