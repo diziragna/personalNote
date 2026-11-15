@@ -21,7 +21,10 @@
   </form>
 
   <main id="notes-view" hidden>
-    <input id="search" class="search" type="search" placeholder="Search title, content, or deadline" aria-label="Search notes" autocomplete="off">
+    <div class="search-row">
+      <input id="search" class="search" type="search" placeholder="Search title, content, or deadline" aria-label="Search notes" autocomplete="off">
+      <button id="new-note" class="new-note-button" type="button" title="New note" aria-label="New note">+</button>
+    </div>
     <p id="status" class="status" role="status" hidden></p>
     <div id="list" class="list"></div>
     <p id="empty" class="empty" hidden></p>
@@ -31,6 +34,7 @@
     </footer>
   </main>
 
+  <script src="editor.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

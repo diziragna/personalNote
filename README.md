@@ -32,7 +32,11 @@ To test the Rust API against Neon before deploying, install the Vercel CLI, copy
 
 ## Browser extension
 
-[`extension/`](extension/) is a popup for Chrome and Firefox (Manifest V3, no build step). It lists your notes collapsed to their title and deadline, sorted with open notes first and the soonest deadline first. Click a note to expand it; opening another closes the first. The search box matches every word against note titles, content, and deadlines (`2026-11`, `Nov 3`, or `overdue`). The popup has no background script, shows the last loaded notes instantly from extension storage, and makes one `GET /api/notes` request each time it opens.
+[`extension/`](extension/) is a popup for Chrome and Firefox (Manifest V3, no build step). It lists your notes collapsed to their title and deadline, sorted with open notes first and the soonest deadline first. Click a note to expand and edit it; opening another closes the first. The search box matches every word against note titles, content, and deadlines (`2026-11`, `Nov 3`, or `overdue`). The popup has no background script, shows the last loaded notes instantly from extension storage, and makes one `GET /api/notes` request each time it opens.
+
+Everything the board edits, except a note's place and size on the board, can be edited in the popup: check a note off (which ticks its checklist lines), tick single checklist lines, rename it, edit its content with bold, italic, and checklists (the same shortcuts as the board), set or clear its deadline, change its color, and delete it (click **Delete** twice). **+** adds a note, which the board places in the next free spot. Edits are sent together after a short pause, so a burst of changes is one request. A popup closes as soon as it loses focus, so it sends any unsaved edits as it closes; if that fails, they stay in extension storage and are sent the next time the popup opens, unless the note was saved somewhere else since.
+
+The note editing helpers in [`extension/editor.js`](extension/editor.js) are a copy of the ones in [`public/app.js`](public/app.js); change both together.
 
 1. The extension talks to `https://personalnote-mu.vercel.app`. To point it at another deployment, change `host_permissions` in [`extension/manifest.json`](extension/manifest.json); the popup reads the API address from there.
 2. Chrome: open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and choose the `extension` folder.
