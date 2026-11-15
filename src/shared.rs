@@ -3,7 +3,7 @@ use http_body_util::BodyExt;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row, postgres::{PgPoolOptions, PgRow}};
 use std::env;
 use vercel_runtime::{Error, Request, Response, ResponseBody};
 use uuid::Uuid;
@@ -123,6 +123,29 @@ pub fn valid_width(value: i32) -> bool { (180..=1200).contains(&value) }
 pub fn valid_height(value: i32) -> bool { (120..=1200).contains(&value) }
 
 pub fn unauthorized() -> Result<Response<ResponseBody>, Error> { error(401, "Please sign in to continue.") }
+
+pub const NOTE_COLUMNS: &str = "id, title, content, color, completed, due_date, pos_x, pos_y, z_index, collapsed, width, height, created_at, updated_at";
+
+pub fn note_json(r: &PgRow) -> Value {
+    json!({
+        "id": r.get::<uuid::Uuid,_>("id"), "title": r.get::<String,_>("title"), "content": r.get::<String,_>("content"),
+        "color": r.get::<String,_>("color"), "completed": r.get::<bool,_>("completed"),
+        "due_date": r.get::<Option<chrono::NaiveDate>,_>("due_date"),
+        "pos_x": r.get::<Option<i32>,_>("pos_x"), "pos_y": r.get::<Option<i32>,_>("pos_y"), "z_index": r.get::<i32,_>("z_index"),
+        "collapsed": r.get::<bool,_>("collapsed"), "width": r.get::<Option<i32>,_>("width"), "height": r.get::<Option<i32>,_>("height"),
+        "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),
+        "updated_at": r.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")
+    })
+}
+
+/// Returns an error message when any provided field is out of range.
+pub fn invalid_fields(title: Option<&str>, content: Option<&str>, color: Option<&str>, positions: &[Option<i32>]) -> Option<&'static str> {
+    if title.is_some_and(|t| t.trim().chars().count() > 120) { return Some("A title can be at most 120 characters.") }
+    if content.is_some_and(|c| c.trim().chars().count() > 2000) { return Some("A note can be at most 2,000 characters.") }
+    if color.is_some_and(|c| !valid_color(c)) { return Some("Choose one of the available note colors.") }
+    if positions.iter().flatten().any(|&v| !valid_position(v)) { return Some("That note position is out of range.") }
+    None
+}
 
 pub fn session_cookie_response(status: u16, payload: Value, token: &str) -> Result<Response<ResponseBody>, Error> {
     Ok(Response::builder().status(status).header("content-type", "application/json; charset=utf-8")

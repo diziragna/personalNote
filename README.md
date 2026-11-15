@@ -45,7 +45,7 @@ Sign in with your Daynote account. The extension uses its own session token, so 
 - `GET /api/auth` — current signed-in account.
 - `POST /api/auth` — JSON `{ "action": "signup" | "signin", "username": "…", "password": "…" }`. Add `"return_token": true` to get `{ "username": "…", "token": "…" }` instead of a session cookie.
 - `PATCH /api/auth` — update credentials with `{ "username": "…", "current_password": "…", "new_password": "…" }`; `new_password` is optional.
-- `DELETE /api/auth` — sign out and revoke the session.
+- `DELETE /api/auth` — sign out and revoke the session. With JSON `{ "delete_account": true, "password": "…" }` it instead deletes the account with all its sessions, notes, and comments; this cannot be undone.
 - `GET /api/notes` — list the current user’s notes.
 - `POST /api/notes` — JSON `{ "title": "…", "content": "…", "color": "yellow", "pos_x": 40, "pos_y": 32, "due_date": "2026-12-31" }`; every field is optional.
 - `PATCH /api/notes` — JSON `{ "id": "…" }` plus any of `title`, `content`, `color`, `completed`, `due_date` (empty string clears it), `pos_x`, `pos_y`, `z_index`, `collapsed`, `width`, `height`.
@@ -54,6 +54,7 @@ Sign in with your Daynote account. The extension uses its own session token, so 
 - `POST /api/comments` — JSON `{ "note_id": "…", "content": "…" }`.
 - `PATCH /api/comments` — JSON `{ "id": "…", "content": "…" }`.
 - `DELETE /api/comments` — JSON `{ "id": "…" }`.
+- `POST /api/sync` — apply notes edited on a device in one request: JSON `{ "changes": [ … ], "pull": true }` with up to 500 changes. Each change is `{ "id": "…", "base_updated_at": "…", "note": { … } }` or `{ "id": "…", "base_updated_at": "…", "deleted": true }`. `id` is a UUID the device chose, `base_updated_at` is the cloud `updated_at` the device last saw (omit it for a note never synced), and `note` is the note's full state with the same fields as `PATCH /api/notes` plus an optional `created_at`. A change only applies while the cloud copy is still at `base_updated_at`. The response has one result per change, `{ "id": "…", "status": "created" | "updated" | "deleted" | "conflict" | "invalid", "note": { … }, "error": "…" }`; a `conflict` carries the current cloud note, or `null` if it was deleted. With `"pull": true` the response also lists every cloud note under `notes`.
 
 Every endpoint accepts the session either as the `note_session` cookie (web app) or as an `Authorization: Bearer <token>` header (browser extension, desktop app); the header wins when both are sent.
 
