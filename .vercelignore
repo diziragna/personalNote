@@ -1,0 +1,3 @@
+# Vercel only serves public/ and builds api/; the desktop app and browser extension ship separately.
+/desktop
+/extension

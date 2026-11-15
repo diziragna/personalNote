@@ -1,5 +1,8 @@
 /target
 /node_modules
+/desktop/node_modules
+/desktop/src-tauri/target
+/desktop/src-tauri/gen
 /.vercel
 .env
 .env.*
