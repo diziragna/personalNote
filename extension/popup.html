@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Daynote</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="bar">
+    <span class="brand"><span class="brand-mark">d.</span>daynote</span>
+    <button id="open-board" class="link-button" type="button">Open board ↗</button>
+  </header>
+
+  <form id="signin" class="signin" hidden>
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" minlength="3" maxlength="24" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" minlength="8" required>
+    <p id="signin-error" class="error" role="alert" hidden></p>
+    <button id="signin-submit" class="primary-button" type="submit">Sign in</button>
+  </form>
+
+  <main id="notes-view" hidden>
+    <input id="search" class="search" type="search" placeholder="Search title, content, or deadline" aria-label="Search notes" autocomplete="off">
+    <p id="status" class="status" role="status" hidden></p>
+    <div id="list" class="list"></div>
+    <p id="empty" class="empty" hidden></p>
+    <footer class="foot">
+      <span id="who"></span>
+      <button id="signout" class="link-button" type="button">Sign out</button>
+    </footer>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

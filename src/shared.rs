@@ -14,7 +14,8 @@ pub async fn pool() -> Result<PgPool, Error> {
 }
 
 /// Apply a shared per-IP request limit. A sixth request in the same second
-/// permanently blocks that IP; the block is shared by all API functions.
+/// blocks that IP for 24 hours; doing it again after that block has ended
+/// blocks it permanently. The block is shared by all API functions.
 pub async fn enforce_ip_limit(pool: &PgPool, req: &Request) -> Result<bool, Error> {
     let raw_ip = req.headers().get("x-real-ip").and_then(|v| v.to_str().ok())
         .or_else(|| req.headers().get("x-forwarded-for").and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()))
@@ -24,12 +25,16 @@ pub async fn enforce_ip_limit(pool: &PgPool, req: &Request) -> Result<bool, Erro
     let blocked: bool = sqlx::query_scalar(
         "INSERT INTO rate_limit_ips (ip, window_started_at, request_count) VALUES ($1::inet, date_trunc('second', now()), 1) \
          ON CONFLICT (ip) DO UPDATE SET \
-           blocked_at = CASE WHEN rate_limit_ips.blocked_at IS NOT NULL THEN rate_limit_ips.blocked_at \
-             WHEN rate_limit_ips.window_started_at = date_trunc('second', now()) AND rate_limit_ips.request_count >= 5 THEN now() \
-             ELSE NULL END, \
+           blocked_until = CASE WHEN rate_limit_ips.blocked_until > now() THEN rate_limit_ips.blocked_until \
+             WHEN rate_limit_ips.window_started_at = date_trunc('second', now()) AND rate_limit_ips.request_count >= 5 THEN \
+               CASE WHEN rate_limit_ips.strike_count > 0 THEN 'infinity'::timestamptz ELSE now() + interval '24 hours' END \
+             ELSE rate_limit_ips.blocked_until END, \
+           strike_count = CASE WHEN rate_limit_ips.blocked_until > now() THEN rate_limit_ips.strike_count \
+             WHEN rate_limit_ips.window_started_at = date_trunc('second', now()) AND rate_limit_ips.request_count >= 5 THEN rate_limit_ips.strike_count + 1 \
+             ELSE rate_limit_ips.strike_count END, \
            request_count = CASE WHEN rate_limit_ips.window_started_at = date_trunc('second', now()) THEN rate_limit_ips.request_count + 1 ELSE 1 END, \
            window_started_at = date_trunc('second', now()) \
-         RETURNING blocked_at IS NOT NULL")
+         RETURNING COALESCE(blocked_until > now(), false)")
         .bind(ip.to_string()).fetch_one(pool).await?;
     Ok(blocked)
 }
@@ -77,7 +82,11 @@ pub fn clear_cookie_header() -> &'static str {
     "note_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
 }
 
+/// The session token from an `Authorization: Bearer` header (browser extension
+/// and desktop app) or, failing that, from the session cookie (web app).
 pub fn request_token(req: &Request) -> Option<String> {
+    let bearer = req.headers().get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
+    if let Some(bearer) = bearer { return Some(bearer.trim().to_owned()) }
     req.headers().get("cookie")?.to_str().ok()?.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;
         (name == "note_session").then(|| value.to_owned())
