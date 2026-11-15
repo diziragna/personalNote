@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Daynote",
-  "version": "0.2.0",
-  "description": "Search, edit, and add Daynote sticky notes from the toolbar.",
+  "version": "0.1.0",
+  "description": "Glance at and search your Daynote sticky notes.",
   "action": {
     "default_popup": "popup.html",
     "default_title": "Daynote",
