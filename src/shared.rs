@@ -3,10 +3,14 @@ use http_body_util::BodyExt;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row, postgres::{PgPoolOptions, PgRow}};
 use std::env;
 use vercel_runtime::{Error, Request, Response, ResponseBody};
 use uuid::Uuid;
+
+#[path = "rules.rs"]
+mod rules;
+pub use rules::*;
 
 pub async fn pool() -> Result<PgPool, Error> {
     let url = env::var("DATABASE_URL").map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "DATABASE_URL is not configured"))?;
@@ -99,30 +103,21 @@ pub async fn user_id(pool: &PgPool, req: &Request) -> Result<Option<Uuid>, sqlx:
         .bind(token_hash(&raw)).fetch_optional(pool).await
 }
 
-pub fn valid_username(name: &str) -> bool {
-    (3..=24).contains(&name.len()) && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
-}
-
-pub fn valid_password(password: &str) -> bool { (8..=128).contains(&password.len()) }
-
-pub fn parse_due_date(value: Option<&str>) -> Result<Option<chrono::NaiveDate>, ()> {
-    match value {
-        None | Some("") => Ok(None),
-        Some(value) => chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map(Some).map_err(|_| ()),
-    }
-}
-
-pub const NOTE_COLORS: [&str; 6] = ["yellow", "pink", "blue", "green", "purple", "orange"];
-
-pub fn valid_color(color: &str) -> bool { NOTE_COLORS.contains(&color) }
-
-pub fn valid_position(value: i32) -> bool { (0..=100_000).contains(&value) }
-
-pub fn valid_width(value: i32) -> bool { (180..=1200).contains(&value) }
-
-pub fn valid_height(value: i32) -> bool { (120..=1200).contains(&value) }
-
 pub fn unauthorized() -> Result<Response<ResponseBody>, Error> { error(401, "Please sign in to continue.") }
+
+pub const NOTE_COLUMNS: &str = "id, title, content, color, completed, due_date, pos_x, pos_y, z_index, collapsed, width, height, created_at, updated_at";
+
+pub fn note_json(r: &PgRow) -> Value {
+    json!({
+        "id": r.get::<uuid::Uuid,_>("id"), "title": r.get::<String,_>("title"), "content": r.get::<String,_>("content"),
+        "color": r.get::<String,_>("color"), "completed": r.get::<bool,_>("completed"),
+        "due_date": r.get::<Option<chrono::NaiveDate>,_>("due_date"),
+        "pos_x": r.get::<Option<i32>,_>("pos_x"), "pos_y": r.get::<Option<i32>,_>("pos_y"), "z_index": r.get::<i32,_>("z_index"),
+        "collapsed": r.get::<bool,_>("collapsed"), "width": r.get::<Option<i32>,_>("width"), "height": r.get::<Option<i32>,_>("height"),
+        "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),
+        "updated_at": r.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")
+    })
+}
 
 pub fn session_cookie_response(status: u16, payload: Value, token: &str) -> Result<Response<ResponseBody>, Error> {
     Ok(Response::builder().status(status).header("content-type", "application/json; charset=utf-8")

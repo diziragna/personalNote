@@ -1,6 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { username: null, mode: 'signin', notes: [], editingTitleId: null, editingDeadlineNoteId: null, pendingDeleteId: null, toastTimer: null };
-const IS_LOCAL_PREVIEW = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const state = { username: null, cave: false, mode: 'signin', notes: [], editingTitleId: null, editingDeadlineNoteId: null, pendingDeleteId: null, toastTimer: null, saving: 0, reloadPending: false, lastPull: 0 };
+// The desktop app (desktop/) serves this page and answers the API from its own on-device store.
+const IS_DESKTOP = Boolean(window.__TAURI__);
+const IS_LOCAL_PREVIEW = !IS_DESKTOP && ['localhost', '127.0.0.1'].includes(window.location.hostname);
 const LOCAL_ACCOUNT_KEY = 'daynote.local.account';
 const LOCAL_NOTES_KEY = 'daynote.local.notes';
 const NOTE_COLORS = ['yellow', 'pink', 'blue', 'green', 'purple', 'orange'];
@@ -71,6 +73,11 @@ async function localRequest(url, options = {}) {
     return { username };
   }
   if (url === '/api/auth' && method === 'DELETE') {
+    if (payload.delete_account) {
+      const current = requireSession();
+      if (current.passwordHash !== await localPasswordHash(String(payload.password || ''), current.salt)) localError('Your password is incorrect.', 401);
+      [LOCAL_ACCOUNT_KEY, LOCAL_NOTES_KEY, 'daynote.local.comments'].forEach((key) => localStorage.removeItem(key));
+    }
     localStorage.removeItem('daynote.local.session');
     return { ok: true };
   }
@@ -161,7 +168,16 @@ function clearError(element) {
   element.hidden = true;
 }
 
+async function desktopRequest(url, options = {}) {
+  try {
+    return await window.__TAURI__.core.invoke('api', { method: options.method || 'GET', path: url, body: options.body ? JSON.parse(options.body) : null });
+  } catch (error) {
+    throw Object.assign(new Error(error?.error || 'Something went wrong. Please try again.'), { status: error?.status });
+  }
+}
+
 async function request(url, options = {}) {
+  if (IS_DESKTOP) return desktopRequest(url, options);
   if (IS_LOCAL_PREVIEW) return localRequest(url, options);
   const response = await fetch(url, {
     credentials: 'same-origin',
@@ -451,14 +467,22 @@ async function saveNote(note, changes, { render = true, rerenderOnError = true, 
   const previous = Object.fromEntries(keys.map((key) => [key, note[key]]));
   Object.assign(note, changes);
   if (render) renderNote(note);
+  state.saving += 1;
   try {
     const result = await request('/api/notes', { method: 'PATCH', body: JSON.stringify({ id: note.id, ...changes }) });
     for (const key of keys) note[key] = result.note[key];
+    if (IS_DESKTOP && note.sync_state !== result.note.sync_state) {
+      note.sync_state = result.note.sync_state;
+      updateSyncBadge(note);
+      refreshSyncStatus();
+    }
     if (message) toast(message);
   } catch (error) {
     Object.assign(note, previous);
     if (rerenderOnError && state.notes.includes(note)) renderNote(note);
     toast(error.message);
+  } finally {
+    state.saving -= 1;
   }
 }
 
@@ -669,7 +693,19 @@ function buildNoteCard(note) {
     closeNoteMenus();
     confirmDelete(note);
   });
-  menu.append(swatches, rename, editDeadline, deleteNote);
+  menu.append(swatches, rename, editDeadline);
+  if (showsSync()) {
+    const syncNote = document.createElement('button');
+    syncNote.className = 'menu-item';
+    syncNote.type = 'button';
+    syncNote.textContent = 'Sync this note';
+    syncNote.addEventListener('click', () => {
+      closeNoteMenus();
+      syncNotes([note.id]);
+    });
+    menu.append(syncNote);
+  }
+  menu.append(deleteNote);
   actions.append(menuButton, menu);
   const collapse = document.createElement('button');
   collapse.className = 'collapse-button';
@@ -758,6 +794,7 @@ function buildNoteCard(note) {
     commitTimer = setTimeout(commit, 700);
   });
   card.append(header, content);
+  if (showsSync() && note.sync_state === 'conflict') card.append(buildConflictBar(note));
 
   if (state.editingDeadlineNoteId === note.id) {
     const deadlineForm = document.createElement('form');
@@ -817,6 +854,7 @@ function buildNoteCard(note) {
   time.dateTime = note.created_at;
   time.textContent = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(note.created_at));
   footer.append(time);
+  if (showsSync() && note.sync_state !== 'synced') time.before(buildSyncBadge(note));
   const resize = document.createElement('span');
   resize.className = 'resize-handle';
   resize.title = 'Drag to resize';
@@ -841,6 +879,131 @@ function renderBoard() {
   updateBoardMeta();
 }
 
+// Desktop sync: notes are saved on the device first and only reach the cloud when the user syncs them.
+const SYNC_LABELS = {
+  local: ['Not synced', 'Only on this device. Sync it to save it to your account.'],
+  changed: ['Changed', 'Changed on this device since the last sync.'],
+  conflict: ['Conflict', 'Changed on this device and in the cloud.'],
+};
+
+function showsSync() {
+  return IS_DESKTOP && !state.cave && Boolean(state.username);
+}
+
+function buildSyncBadge(note) {
+  const [label, hint] = SYNC_LABELS[note.sync_state] || ['', ''];
+  const badge = document.createElement('span');
+  badge.className = `sync-badge sync-${note.sync_state}`;
+  badge.textContent = label;
+  badge.title = hint;
+  return badge;
+}
+
+function updateSyncBadge(note) {
+  const card = noteCard(note.id);
+  if (!card) return;
+  card.querySelector('.sync-badge')?.remove();
+  if (showsSync() && note.sync_state !== 'synced') card.querySelector('.sticky-time')?.before(buildSyncBadge(note));
+}
+
+function buildConflictBar(note) {
+  const deleted = note.conflict === 'deleted';
+  const bar = document.createElement('div');
+  bar.className = 'conflict-bar';
+  const copy = document.createElement('p');
+  copy.textContent = deleted ? 'Deleted in the cloud since your last sync.' : 'Also changed in the cloud since your last sync.';
+  const actions = document.createElement('div');
+  actions.className = 'conflict-actions';
+  const choices = deleted ? [['device', 'Keep it'], ['cloud', 'Delete it']] : [['device', 'Keep this device'], ['cloud', 'Keep cloud'], ['both', 'Keep both']];
+  for (const [keep, label] of choices) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', () => resolveConflict(note.id, keep));
+    actions.append(button);
+  }
+  bar.append(copy, actions);
+  return bar;
+}
+
+async function refreshSyncStatus() {
+  if (!showsSync()) return;
+  try {
+    const { online, pending, conflicts } = await request('/api/desktop/status');
+    const parts = [online === false && 'Offline', conflicts && `${conflicts} to resolve`, pending && `${pending} to sync`].filter(Boolean);
+    $('#sync-status').textContent = parts.join(' · ') || 'All synced';
+    $('#sync-status').classList.toggle('offline', online === false);
+  } catch (_) { /* The status line keeps its last value. */ }
+}
+
+function syncSummary({ synced, conflicts, errors }) {
+  if (errors.length) return errors[0];
+  if (conflicts) return conflicts === 1 ? 'A note changed in both places. Choose which version to keep.' : `${conflicts} notes changed in both places. Choose which versions to keep.`;
+  return synced ? 'Synced.' : 'Everything is up to date.';
+}
+
+// Let edits that are still being saved land before syncing or reloading the board.
+async function whenSaved() {
+  while (state.saving) await new Promise((resolve) => setTimeout(resolve, 50));
+}
+
+async function syncNotes(ids = null) {
+  const button = $('#sync-all');
+  button.disabled = true;
+  button.textContent = 'Syncing…';
+  try {
+    await whenSaved();
+    const result = await request('/api/desktop/sync', { method: 'POST', body: JSON.stringify({ ids }) });
+    setNotes(result.notes);
+    toast(syncSummary(result));
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Sync all';
+    refreshSyncStatus();
+  }
+}
+
+async function resolveConflict(id, keep) {
+  try {
+    const result = await request('/api/desktop/resolve', { method: 'POST', body: JSON.stringify({ id, keep }) });
+    setNotes(result.notes);
+    if (keep === 'device') toast(syncSummary(result));
+  } catch (error) {
+    // Keeping this device's version is saved even when sending it fails, for example offline.
+    toast(error.message);
+    await loadNotes();
+  }
+}
+
+const isTyping = () => Boolean(document.activeElement?.closest?.('.sticky-content, .sticky-title-input, .deadline-edit-form'));
+
+// Rebuilding the board would interrupt typing, so cloud changes appear once the user stops editing.
+async function reloadWhenIdle() {
+  if (!state.reloadPending) return;
+  if (isTyping() || state.saving) {
+    setTimeout(reloadWhenIdle, 500);
+    return;
+  }
+  state.reloadPending = false;
+  await loadNotes();
+}
+
+// While online, cloud changes come down on their own, at most once a minute; nothing goes up until the user syncs.
+async function pullFromCloud() {
+  if (!showsSync() || Date.now() - state.lastPull < 60000) return;
+  state.lastPull = Date.now();
+  try {
+    const result = await request('/api/desktop/pull', { method: 'POST' });
+    if (result.changed) {
+      state.reloadPending = true;
+      reloadWhenIdle();
+    }
+  } catch (_) { /* Pulling is best effort; the status line shows when the app is offline. */ }
+  refreshSyncStatus();
+}
+
 async function createNote(position) {
   const board = $('#dashboard');
   const cascade = (state.notes.length % 8) * 28;
@@ -856,6 +1019,7 @@ async function createNote(position) {
     }) });
     state.notes.unshift(data.note);
     startTitleEdit(data.note);
+    refreshSyncStatus();
   } catch (error) {
     toast(error.message);
   } finally {
@@ -863,21 +1027,47 @@ async function createNote(position) {
   }
 }
 
-function displayDashboard(username) {
+function displayDashboard({ username, cave = false }) {
   state.username = username;
+  state.cave = cave;
   $('#auth-view').hidden = true;
   $('#dashboard').hidden = false;
   $('#signed-in-nav').hidden = false;
   $('#nav-signin').hidden = true;
-  $('#nav-username').textContent = username;
-  $('#avatar').textContent = username.charAt(0).toUpperCase();
+  $('#nav-username').textContent = cave ? 'In cave' : username;
+  $('#avatar').textContent = cave ? '⛰' : username.charAt(0).toUpperCase();
+  // The cave has no account to manage, only a way out.
+  $('#cave-exit-button').hidden = !cave;
+  $('#settings-button').hidden = cave;
+  $('#signout-button').hidden = cave;
+  $('#sync-controls').hidden = !showsSync();
+}
+
+function showAuthView(mode = 'signin') {
+  state.username = null;
+  state.notes = [];
+  state.editingTitleId = null;
+  state.editingDeadlineNoteId = null;
+  $('#board-canvas').replaceChildren();
+  $('#signed-in-nav').hidden = true;
+  $('#nav-signin').hidden = false;
+  $('#dashboard').hidden = true;
+  $('#auth-view').hidden = false;
+  $('#password').value = '';
+  // Leaving the cave: notes made there join whichever account the user signs in to.
+  $('#cave-hint').hidden = !state.cave;
+  setMode(mode);
+}
+
+function setNotes(notes) {
+  state.notes = notes.map((note) => ({ title: '', color: 'yellow', pos_x: null, pos_y: null, z_index: 0, collapsed: false, width: null, height: null, ...note }));
+  placeUnpositionedNotes();
+  renderBoard();
+  refreshSyncStatus();
 }
 
 async function loadNotes() {
-  const result = await request('/api/notes');
-  state.notes = result.notes.map((note) => ({ title: '', color: 'yellow', pos_x: null, pos_y: null, z_index: 0, collapsed: false, width: null, height: null, ...note }));
-  placeUnpositionedNotes();
-  renderBoard();
+  setNotes((await request('/api/notes')).notes);
 }
 
 document.querySelectorAll('.auth-tab').forEach((tab) => tab.addEventListener('click', () => setMode(tab.dataset.mode)));
@@ -890,8 +1080,9 @@ $('#auth-form').addEventListener('submit', async (event) => {
   button.disabled = true;
   try {
     const data = await request('/api/auth', { method: 'POST', body: JSON.stringify({ action: state.mode, username: $('#username').value.trim(), password: $('#password').value }) });
-    displayDashboard(data.username);
+    displayDashboard(data);
     await loadNotes();
+    pullFromCloud();
   } catch (err) {
     showError(error, err.message);
   } finally {
@@ -917,6 +1108,7 @@ $('#delete-dialog').addEventListener('close', async () => {
     noteCard(note.id)?.remove();
     updateBoardMeta();
     toast('Note deleted.');
+    refreshSyncStatus();
   } catch (error) {
     toast(error.message);
   }
@@ -931,17 +1123,46 @@ document.addEventListener('click', (event) => {
 
 $('#signout-button').addEventListener('click', async () => {
   try { await request('/api/auth', { method: 'DELETE' }); } catch (_) { /* The local view still needs to clear. */ }
-  state.username = null;
-  state.notes = [];
-  state.editingTitleId = null;
-  state.editingDeadlineNoteId = null;
-  $('#board-canvas').replaceChildren();
-  $('#signed-in-nav').hidden = true;
-  $('#nav-signin').hidden = false;
-  $('#dashboard').hidden = true;
-  $('#auth-view').hidden = false;
-  $('#password').value = '';
-  setMode('signin');
+  state.cave = false;
+  showAuthView();
+});
+
+$('#cave-button').addEventListener('click', async () => {
+  try {
+    displayDashboard(await request('/api/desktop/cave', { method: 'POST' }));
+    await loadNotes();
+  } catch (error) {
+    showError($('#auth-error'), error.message);
+  }
+});
+$('#cave-exit-button').addEventListener('click', () => {
+  $('#account-menu').hidden = true;
+  showAuthView('signup');
+});
+$('#sync-all').addEventListener('click', () => syncNotes());
+
+$('#delete-account-button').addEventListener('click', () => {
+  $('#settings-dialog').close();
+  $('#delete-account-password').value = '';
+  clearError($('#delete-account-error'));
+  $('#delete-account-dialog').showModal();
+});
+$('#cancel-delete-account').addEventListener('click', () => $('#delete-account-dialog').close());
+$('#delete-account-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = $('#confirm-delete-account');
+  button.disabled = true;
+  try {
+    await request('/api/auth', { method: 'DELETE', body: JSON.stringify({ delete_account: true, password: $('#delete-account-password').value }) });
+    $('#delete-account-dialog').close();
+    state.cave = false;
+    showAuthView();
+    toast(IS_DESKTOP ? 'Account deleted. Its notes are still on this device, in the cave.' : 'Your account was deleted.');
+  } catch (error) {
+    showError($('#delete-account-error'), error.message);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $('#settings-button').addEventListener('click', () => {
@@ -968,7 +1189,7 @@ $('#settings-form').addEventListener('submit', async (event) => {
   };
   try {
     const data = await request('/api/auth', { method: 'PATCH', body: JSON.stringify(payload) });
-    displayDashboard(data.username);
+    displayDashboard(data);
     $('#settings-dialog').close();
     toast('Account updated.');
   } catch (err) {
@@ -981,11 +1202,20 @@ $('#settings-form').addEventListener('submit', async (event) => {
 (async function initialize() {
   applyTheme(document.documentElement.dataset.theme === 'dark');
   $('#local-badge').hidden = !IS_LOCAL_PREVIEW;
+  $('#cave-entry').hidden = !IS_DESKTOP;
+  $('#delete-account-copy').textContent = IS_DESKTOP
+    ? 'Your account and every note saved in the cloud will be deleted permanently. Notes on this device stay here, in the cave.'
+    : 'Your account and all of its notes will be deleted permanently. This can’t be undone.';
   $('#preview-date').textContent = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date()).toUpperCase();
+  if (IS_DESKTOP) {
+    window.addEventListener('focus', pullFromCloud);
+    setInterval(pullFromCloud, 5 * 60000);
+  }
   try {
     const data = await request('/api/auth');
-    displayDashboard(data.username);
+    displayDashboard(data);
     await loadNotes();
+    pullFromCloud();
   } catch (_) {
     // A visitor without a session starts at the sign-in screen.
   }

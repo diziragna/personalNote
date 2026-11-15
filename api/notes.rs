@@ -1,35 +1,11 @@
 ﻿#[path = "../src/shared.rs"]
 mod shared;
-use serde_json::{json, Value};
-use sqlx::{postgres::PgRow, Row};
+use serde_json::json;
 use vercel_runtime::{run, service_fn, Error, Request, Response, ResponseBody};
 use shared::*;
 
-const NOTE_COLUMNS: &str = "id, title, content, color, completed, due_date, pos_x, pos_y, z_index, collapsed, width, height, created_at, updated_at";
-
 #[tokio::main]
 async fn main() -> Result<(), Error> { run(service_fn(handler)).await }
-
-fn note_json(r: &PgRow) -> Value {
-    json!({
-        "id": r.get::<uuid::Uuid,_>("id"), "title": r.get::<String,_>("title"), "content": r.get::<String,_>("content"),
-        "color": r.get::<String,_>("color"), "completed": r.get::<bool,_>("completed"),
-        "due_date": r.get::<Option<chrono::NaiveDate>,_>("due_date"),
-        "pos_x": r.get::<Option<i32>,_>("pos_x"), "pos_y": r.get::<Option<i32>,_>("pos_y"), "z_index": r.get::<i32,_>("z_index"),
-        "collapsed": r.get::<bool,_>("collapsed"), "width": r.get::<Option<i32>,_>("width"), "height": r.get::<Option<i32>,_>("height"),
-        "created_at": r.get::<chrono::DateTime<chrono::Utc>,_>("created_at"),
-        "updated_at": r.get::<chrono::DateTime<chrono::Utc>,_>("updated_at")
-    })
-}
-
-/// Returns an error message when any provided field is out of range.
-fn invalid_fields(title: Option<&str>, content: Option<&str>, color: Option<&str>, positions: &[Option<i32>]) -> Option<&'static str> {
-    if title.is_some_and(|t| t.trim().chars().count() > 120) { return Some("A title can be at most 120 characters.") }
-    if content.is_some_and(|c| c.trim().chars().count() > 2000) { return Some("A note can be at most 2,000 characters.") }
-    if color.is_some_and(|c| !valid_color(c)) { return Some("Choose one of the available note colors.") }
-    if positions.iter().flatten().any(|&v| !valid_position(v)) { return Some("That note position is out of range.") }
-    None
-}
 
 async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
     let db = match pool().await { Ok(db) => db, Err(e) => { eprintln!("database connection failed: {e}"); return error(503, "The database is unavailable.") } };

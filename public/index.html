@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#f5f4f0">
   <title>Daynote — a quieter place for your thoughts</title>
   <script>try{if(localStorage.getItem('daynote.theme')==='dark')document.documentElement.dataset.theme='dark'}catch{}</script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="preload" href="/fonts/dm-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/fonts/fonts.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -17,11 +17,16 @@
       <a class="brand" href="/" aria-label="Daynote home"><span class="brand-mark">d.</span><span>daynote</span></a>
       <span id="local-badge" class="local-badge" hidden>LOCAL PREVIEW · THIS BROWSER ONLY</span>
       <div id="signed-in-nav" class="signed-in-nav" hidden>
+        <div id="sync-controls" class="sync-controls" hidden>
+          <span id="sync-status" class="sync-status" role="status"></span>
+          <button id="sync-all" class="sync-all-button" type="button" title="Send this device's changes to your account and bring cloud changes down">Sync all</button>
+        </div>
         <span id="note-count" class="note-count">0 notes</span>
         <button id="new-note" class="new-note-button" type="button"><span>＋</span> New note</button>
         <button id="account-button" class="account-button" aria-label="Account settings"><span id="avatar" class="avatar">D</span><span id="nav-username"></span><span class="chevron">⌄</span></button>
         <div id="account-menu" class="account-menu" hidden>
           <button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">☾ &nbsp; Dark mode</button>
+          <button id="cave-exit-button" title="Create an account or sign in; your cave notes come with you" hidden>Out of cave</button>
           <button id="settings-button">Account settings</button>
           <button id="signout-button" class="signout">Sign out</button>
         </div>
@@ -51,6 +56,7 @@
             <p class="eyebrow muted">WELCOME TO DAYNOTE</p>
             <h2 id="auth-title">Good to have you back.</h2>
             <p id="auth-subtitle">Sign in to pick up where you left off.</p>
+            <p id="cave-hint" class="cave-hint" hidden>Your cave notes come with you. They stay on this device until you sync them.</p>
           </div>
           <div class="auth-tabs"><button class="auth-tab active" data-mode="signin">Sign in</button><button class="auth-tab" data-mode="signup">Create account</button></div>
           <form id="auth-form" class="form-stack">
@@ -61,6 +67,10 @@
             <p id="auth-error" class="form-error" role="alert" hidden></p>
             <button id="auth-submit" class="primary-button" type="submit"><span>Sign in</span><span class="button-arrow">→</span></button>
           </form>
+          <div id="cave-entry" class="cave-entry" hidden>
+            <span class="cave-rule">or</span>
+            <button id="cave-button" class="cave-button" type="button" title="Use offline, data only stored in your device">In cave</button>
+          </div>
           <div class="auth-note"><span class="lock-icon">▣</span> Your notes stay private to your account.</div>
         </div>
       </section>
@@ -81,6 +91,16 @@
         <label for="new-password">New password <span class="optional">optional</span></label><input id="new-password" type="password" minlength="8" autocomplete="new-password" placeholder="Leave blank to keep your password">
         <p id="settings-error" class="form-error" role="alert" hidden></p>
         <button id="save-settings" type="submit" class="primary-button">Save changes <span class="button-arrow">→</span></button>
+        <button id="delete-account-button" type="button" class="delete-account-link">Delete account…</button>
+      </form>
+    </dialog>
+
+    <dialog id="delete-account-dialog" class="settings-dialog">
+      <form id="delete-account-form" class="settings-card confirm-card">
+        <div class="auth-icon danger-icon">!</div><h2>Delete your account?</h2><p id="delete-account-copy" class="settings-copy"></p>
+        <label for="delete-account-password">Password</label><input id="delete-account-password" type="password" autocomplete="current-password" required>
+        <p id="delete-account-error" class="form-error" role="alert" hidden></p>
+        <div class="confirm-actions"><button type="button" id="cancel-delete-account" class="secondary-button">Cancel</button><button id="confirm-delete-account" type="submit" class="danger-button">Delete account</button></div>
       </form>
     </dialog>
 

@@ -28,6 +28,10 @@ path = "api/notes.rs"
 name = "comments"
 path = "api/comments.rs"
 
+[[bin]]
+name = "sync"
+path = "api/sync.rs"
+
 [profile.release]
 codegen-units = 1
 lto = "fat"

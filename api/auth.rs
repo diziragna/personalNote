@@ -12,6 +12,9 @@ struct AuthInput {
     #[serde(default)] return_token: bool
 }
 
+#[derive(Deserialize, Default)]
+struct DeleteInput { #[serde(default)] delete_account: bool, password: Option<String> }
+
 #[tokio::main]
 async fn main() -> Result<(), Error> { run(service_fn(handler)).await }
 
@@ -85,7 +88,17 @@ async fn handler(req: Request) -> Result<Response<ResponseBody>, Error> {
         let name: String = sqlx::query_scalar("SELECT username FROM users WHERE id=$1").bind(uid).fetch_one(&db).await?;
         response(200, json!({"username": name}))
     } else if method.as_str() == "DELETE" {
-        if let Some(raw) = old_token { sqlx::query("DELETE FROM sessions WHERE token_hash=$1").bind(token_hash(&raw)).execute(&db).await?; }
+        let uid = user_id(&db, &req).await?;
+        // A plain DELETE signs out; with `delete_account` it also removes the account, its sessions, and all its notes.
+        let input: DeleteInput = body(req).await.unwrap_or_default();
+        if input.delete_account {
+            let Some(uid) = uid else { return unauthorized() };
+            let hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id=$1").bind(uid).fetch_one(&db).await?;
+            if !verify_password(&input.password.unwrap_or_default(), &hash) { return error(401, "Your password is incorrect.") }
+            sqlx::query("DELETE FROM users WHERE id=$1").bind(uid).execute(&db).await?;
+        } else if let Some(raw) = old_token {
+            sqlx::query("DELETE FROM sessions WHERE token_hash=$1").bind(token_hash(&raw)).execute(&db).await?;
+        }
         Ok(Response::builder().status(200).header("content-type", "application/json").header("cache-control", "no-store").header("set-cookie", clear_cookie_header()).body(ResponseBody::from(json!({"ok":true}).to_string()))?)
     } else { error(405, "Method not allowed.") }
 }
