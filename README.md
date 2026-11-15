@@ -15,6 +15,7 @@ A small personal notes app with a Rust serverless API, a static browser UI, and 
 - Delete notes after a confirmation. Deletion is permanent and cannot be undone.
 - Passwords are hashed with Argon2id. Sessions use random HttpOnly, Secure, SameSite cookies; only a SHA-256 digest of each session token is stored in Postgres.
 - Each account can only access its own notes.
+- The DM Sans and Manrope fonts are served from [`public/fonts/`](public/fonts/) (SIL Open Font License 1.1), so the board looks the same on the web and in the desktop app, online or offline, and loads nothing from other sites.
 
 ## Set up Neon
 
