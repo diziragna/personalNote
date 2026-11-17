@@ -2,11 +2,17 @@ const $ = (selector) => document.querySelector(selector);
 const state = { username: null, cave: false, mode: 'signin', notes: [], editingTitleId: null, editingDeadlineNoteId: null, pendingDeleteId: null, toastTimer: null, saving: 0, reloadPending: false, lastPull: 0 };
 // The desktop app (desktop/) serves this page and answers the API from its own on-device store.
 const IS_DESKTOP = Boolean(window.__TAURI__);
+// On the desktop every note is a window of its own, labelled "note-<id>"; the main window only holds the account.
+const WINDOW_LABEL = IS_DESKTOP ? window.__TAURI__.window.getCurrentWindow().label : '';
+const NOTE_WINDOW_ID = WINDOW_LABEL.startsWith('note-') ? WINDOW_LABEL.slice(5) : null;
+const DESKTOP_HOME = IS_DESKTOP && !NOTE_WINDOW_ID;
+document.documentElement.classList.toggle('note-window', Boolean(NOTE_WINDOW_ID));
 const IS_LOCAL_PREVIEW = !IS_DESKTOP && ['localhost', '127.0.0.1'].includes(window.location.hostname);
 const LOCAL_ACCOUNT_KEY = 'daynote.local.account';
 const LOCAL_NOTES_KEY = 'daynote.local.notes';
 const NOTE_COLORS = ['yellow', 'pink', 'blue', 'green', 'purple', 'orange'];
 const NOTE_WIDTH = 248;
+const NOTE_HEIGHT = 220;
 const GRID_GAP = 24;
 
 async function localPasswordHash(password, salt) {
@@ -175,6 +181,8 @@ async function desktopRequest(url, options = {}) {
     throw Object.assign(new Error(error?.error || 'Something went wrong. Please try again.'), { status: error?.status });
   }
 }
+
+const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
 
 async function request(url, options = {}) {
   if (IS_DESKTOP) return desktopRequest(url, options);
@@ -456,10 +464,22 @@ function fitCanvas() {
 }
 
 function updateBoardMeta() {
+  if (NOTE_WINDOW_ID) {
+    fitNoteWindow();
+    return;
+  }
   const count = state.notes.length;
   $('#note-count').textContent = `${count} ${count === 1 ? 'note' : 'notes'}`;
-  $('#empty-state').hidden = count !== 0;
+  $('#empty-state').hidden = !DESKTOP_HOME && count !== 0;
   fitCanvas();
+}
+
+// A note's window is as large as its note: the saved size, or just the header while the note is collapsed.
+function fitNoteWindow() {
+  const note = state.notes[0];
+  const card = note && noteCard(note.id);
+  if (!card) return;
+  invoke('note_fit', { width: note.width || NOTE_WIDTH, height: note.collapsed ? card.offsetHeight : note.height || NOTE_HEIGHT, collapsed: note.collapsed }).catch(() => {});
 }
 
 async function saveNote(note, changes, { render = true, rerenderOnError = true, message = null } = {}) {
@@ -495,6 +515,11 @@ function startTitleEdit(note) {
 
 function confirmDelete(note) {
   state.pendingDeleteId = note.id;
+  // A note's own window is too small for a dialog; it asks inside the note instead.
+  if (NOTE_WINDOW_ID) {
+    renderNote(note);
+    return;
+  }
   $('#delete-copy').textContent = `“${note.title || 'Untitled'}” will be removed permanently and can’t be restored.`;
   const dialog = $('#delete-dialog');
   dialog.returnValue = '';
@@ -512,6 +537,12 @@ function startDrag(event, note, card) {
     const dx = moveEvent.clientX - start.x;
     const dy = moveEvent.clientY - start.y;
     if (!moved && Math.hypot(dx, dy) < 4) return;
+    // In its own window the note is moved by moving the window, which the system takes over from here.
+    if (NOTE_WINDOW_ID) {
+      stop();
+      invoke('note_drag').catch(() => {});
+      return;
+    }
     if (!moved) {
       moved = true;
       closeNoteMenus();
@@ -521,11 +552,14 @@ function startDrag(event, note, card) {
     card.style.left = `${clamp(Math.round(start.left + dx), 0, canvas.offsetWidth - card.offsetWidth)}px`;
     card.style.top = `${clamp(Math.round(start.top + dy), 0, canvas.offsetHeight - card.offsetHeight)}px`;
   };
-  const end = (endEvent) => {
-    if (endEvent.pointerId !== event.pointerId) return;
+  const stop = () => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', end);
     window.removeEventListener('pointercancel', end);
+  };
+  const end = (endEvent) => {
+    if (endEvent.pointerId !== event.pointerId) return;
+    stop();
     card.classList.remove('dragging');
     document.body.classList.remove('is-dragging');
     if (!moved) return;
@@ -543,6 +577,10 @@ function startDrag(event, note, card) {
 function startResize(event, note, card) {
   if (event.button !== 0) return;
   event.preventDefault();
+  if (NOTE_WINDOW_ID) {
+    window.__TAURI__.window.getCurrentWindow().startResizeDragging('SouthEast').catch(() => {});
+    return;
+  }
   const canvas = $('#board-canvas');
   const start = { x: event.clientX, y: event.clientY, width: card.offsetWidth, height: card.offsetHeight };
   card.classList.add('resizing', 'sized');
@@ -650,11 +688,15 @@ function buildNoteCard(note) {
   const menu = document.createElement('div');
   menu.className = 'note-menu';
   menu.hidden = true;
-  menuButton.addEventListener('click', () => {
+  const toggleMenu = () => {
     const opening = menu.hidden;
     closeNoteMenus();
     menu.hidden = !opening;
     menuButton.setAttribute('aria-expanded', String(opening));
+  };
+  menuButton.addEventListener('click', () => {
+    if (NOTE_WINDOW_ID) openNoteWindowMenu(note).catch(toggleMenu);
+    else toggleMenu();
   });
   const swatches = document.createElement('div');
   swatches.className = 'color-swatches';
@@ -715,6 +757,16 @@ function buildNoteCard(note) {
   collapse.setAttribute('aria-expanded', String(!note.collapsed));
   collapse.addEventListener('click', () => saveNote(note, { collapsed: !note.collapsed }));
   header.append(checkbox, title, collapse, actions);
+  if (NOTE_WINDOW_ID) {
+    const add = document.createElement('button');
+    add.className = 'add-note-button';
+    add.type = 'button';
+    add.textContent = '+';
+    add.title = 'New note';
+    add.setAttribute('aria-label', 'New note');
+    add.addEventListener('click', () => createNote());
+    collapse.before(add);
+  }
 
   const content = document.createElement('div');
   content.className = 'sticky-content';
@@ -795,6 +847,7 @@ function buildNoteCard(note) {
   });
   card.append(header, content);
   if (showsSync() && note.sync_state === 'conflict') card.append(buildConflictBar(note));
+  if (NOTE_WINDOW_ID && state.pendingDeleteId === note.id) card.append(buildDeleteBar(note));
 
   if (state.editingDeadlineNoteId === note.id) {
     const deadlineForm = document.createElement('form');
@@ -862,6 +915,54 @@ function buildNoteCard(note) {
   resize.addEventListener('pointerdown', (event) => startResize(event, note, card));
   card.append(footer, resize);
   return card;
+}
+
+// The note's menu as a system menu, which is not cut off by the edges of the note's small window.
+async function openNoteWindowMenu(note) {
+  const colors = NOTE_COLORS.map((color) => ({
+    text: `${color.charAt(0).toUpperCase()}${color.slice(1)}`,
+    checked: color === note.color,
+    action: () => { if (color !== note.color) saveNote(note, { color }); },
+  }));
+  const items = [
+    { text: 'Color', items: colors },
+    { text: 'Rename', action: () => startTitleEdit(note) },
+    { text: note.due_date ? 'Edit deadline' : 'Set deadline', action: () => {
+      state.editingDeadlineNoteId = note.id;
+      renderNote(note).querySelector('.deadline-edit-form input')?.focus();
+    } },
+  ];
+  if (showsSync()) items.push({ text: 'Sync this note', action: () => syncNotes([note.id]) });
+  items.push({ item: 'Separator' }, { text: 'Delete note', action: () => confirmDelete(note) });
+  const menu = await window.__TAURI__.menu.Menu.new({ items });
+  await menu.popup();
+}
+
+function buildDeleteBar(note) {
+  const bar = document.createElement('div');
+  bar.className = 'conflict-bar';
+  const copy = document.createElement('p');
+  copy.textContent = 'Delete this note permanently?';
+  const actions = document.createElement('div');
+  actions.className = 'conflict-actions';
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'danger';
+  remove.textContent = 'Delete';
+  remove.addEventListener('click', () => {
+    state.pendingDeleteId = null;
+    deleteNote(note);
+  });
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => {
+    state.pendingDeleteId = null;
+    renderNote(note);
+  });
+  actions.append(remove, cancel);
+  bar.append(copy, actions);
+  return bar;
 }
 
 function renderNote(note) {
@@ -987,13 +1088,17 @@ async function reloadWhenIdle() {
     return;
   }
   state.reloadPending = false;
-  await loadNotes();
+  try { await loadNotes(); } catch (_) { /* Signed out meanwhile; the app closes or resets this window. */ }
 }
 
 // While online, cloud changes come down on their own, at most once a minute; nothing goes up until the user syncs.
 async function pullFromCloud() {
-  if (!showsSync() || Date.now() - state.lastPull < 60000) return;
+  if (!showsSync()) return;
+  // Every note window asks; the time of the last pull is shared between them so only one goes through.
+  try { state.lastPull = Math.max(state.lastPull, Number(localStorage.getItem('daynote.lastPull')) || 0); } catch (_) { /* This window keeps its own count. */ }
+  if (Date.now() - state.lastPull < 60000) return;
   state.lastPull = Date.now();
+  try { localStorage.setItem('daynote.lastPull', String(state.lastPull)); } catch (_) { /* As above. */ }
   try {
     const result = await request('/api/desktop/pull', { method: 'POST' });
     if (result.changed) {
@@ -1005,6 +1110,17 @@ async function pullFromCloud() {
 }
 
 async function createNote(position) {
+  if (IS_DESKTOP) {
+    // The app opens a window for the new note, next to this one when it was made from a note.
+    const current = NOTE_WINDOW_ID ? state.notes[0] : null;
+    const index = current ? NOTE_COLORS.indexOf(current.color) + 1 : state.notes.length;
+    try {
+      await request('/api/notes', { method: 'POST', body: JSON.stringify({ title: '', content: '', color: NOTE_COLORS[index % NOTE_COLORS.length] }) });
+    } catch (error) {
+      toast(error.message);
+    }
+    return;
+  }
   const board = $('#dashboard');
   const cascade = (state.notes.length % 8) * 28;
   const x = position ? position.x : board.scrollLeft + 40 + cascade;
@@ -1060,9 +1176,15 @@ function showAuthView(mode = 'signin') {
 }
 
 function setNotes(notes) {
+  if (NOTE_WINDOW_ID) notes = notes.filter((note) => note.id === NOTE_WINDOW_ID);
   state.notes = notes.map((note) => ({ title: '', color: 'yellow', pos_x: null, pos_y: null, z_index: 0, collapsed: false, width: null, height: null, ...note }));
-  placeUnpositionedNotes();
-  renderBoard();
+  // The desktop's main window only counts the notes; each one is drawn in its own window.
+  if (DESKTOP_HOME) {
+    updateBoardMeta();
+  } else {
+    placeUnpositionedNotes();
+    renderBoard();
+  }
   refreshSyncStatus();
 }
 
@@ -1092,7 +1214,7 @@ $('#auth-form').addEventListener('submit', async (event) => {
 
 $('#new-note').addEventListener('click', () => createNote());
 $('#board-canvas').addEventListener('dblclick', (event) => {
-  if (event.target !== event.currentTarget) return;
+  if (event.target !== event.currentTarget || IS_DESKTOP) return;
   const rect = event.currentTarget.getBoundingClientRect();
   createNote({ x: event.clientX - rect.left - 24, y: event.clientY - rect.top - 18 });
 });
@@ -1101,7 +1223,10 @@ $('#delete-dialog').addEventListener('click', (event) => { if (event.target === 
 $('#delete-dialog').addEventListener('close', async () => {
   const note = state.notes.find((item) => item.id === state.pendingDeleteId);
   state.pendingDeleteId = null;
-  if ($('#delete-dialog').returnValue !== 'delete' || !note) return;
+  if ($('#delete-dialog').returnValue === 'delete' && note) deleteNote(note);
+});
+
+async function deleteNote(note) {
   try {
     await request('/api/notes', { method: 'DELETE', body: JSON.stringify({ id: note.id }) });
     state.notes = state.notes.filter((item) => item.id !== note.id);
@@ -1112,7 +1237,7 @@ $('#delete-dialog').addEventListener('close', async () => {
   } catch (error) {
     toast(error.message);
   }
-});
+}
 
 $('#account-button').addEventListener('click', () => { $('#account-menu').hidden = !$('#account-menu').hidden; });
 $('#theme-toggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme !== 'dark'));
@@ -1199,6 +1324,30 @@ $('#settings-form').addEventListener('submit', async (event) => {
   }
 });
 
+// Moving or resizing a note's window is how the note is moved and resized; save both once the gesture settles.
+function watchNoteWindow() {
+  let placeTimer = null;
+  let sizeTimer = null;
+  window.__TAURI__.window.getCurrentWindow().onMoved(() => {
+    clearTimeout(placeTimer);
+    placeTimer = setTimeout(() => invoke('note_place').catch(() => {}), 300);
+  });
+  window.addEventListener('resize', () => {
+    clearTimeout(sizeTimer);
+    sizeTimer = setTimeout(() => {
+      const note = state.notes[0];
+      if (!note) return;
+      const width = clamp(window.innerWidth, 180, 1200);
+      const height = clamp(window.innerHeight, 120, 1200);
+      const changes = {};
+      // A pixel or two of difference is the system rounding the size the note asked for, not the user resizing.
+      if (Math.abs(width - (note.width || NOTE_WIDTH)) > 2) changes.width = width;
+      if (!note.collapsed && Math.abs(height - (note.height || NOTE_HEIGHT)) > 2) changes.height = height;
+      if (Object.keys(changes).length) saveNote(note, changes, { render: false });
+    }, 400);
+  });
+}
+
 (async function initialize() {
   applyTheme(document.documentElement.dataset.theme === 'dark');
   $('#local-badge').hidden = !IS_LOCAL_PREVIEW;
@@ -1210,12 +1359,26 @@ $('#settings-form').addEventListener('submit', async (event) => {
   if (IS_DESKTOP) {
     window.addEventListener('focus', pullFromCloud);
     setInterval(pullFromCloud, 5 * 60000);
+    // Another window added, removed, synced, or edited notes, or the session changed.
+    window.__TAURI__.event.listen('notes-changed', () => {
+      state.reloadPending = true;
+      reloadWhenIdle();
+    });
+    window.addEventListener('storage', (event) => { if (event.key === 'daynote.theme') applyTheme(event.newValue === 'dark'); });
   }
+  if (DESKTOP_HOME) {
+    $('#empty-state h3').textContent = 'Your notes live on your desktop.';
+    $('#empty-state p').textContent = 'Press New note to stick one anywhere on your screen. You can close this window; Daynote stays in the tray.';
+  }
+  if (NOTE_WINDOW_ID) watchNoteWindow();
   try {
     const data = await request('/api/auth');
     displayDashboard(data);
     await loadNotes();
     pullFromCloud();
+    // A note that was just made is ready to type into.
+    const note = NOTE_WINDOW_ID && state.notes[0];
+    if (note && !note.title && !note.content && Date.now() - new Date(note.created_at) < 15000) noteCard(note.id)?.querySelector('.sticky-content').focus();
   } catch (_) {
     // A visitor without a session starts at the sign-in screen.
   }

@@ -68,8 +68,17 @@ pub fn cloud_error(error: CloudError, offline_message: &str) -> ApiError {
 }
 
 #[tauri::command]
-pub async fn api(state: tauri::State<'_, AppState>, method: String, path: String, body: Option<Value>) -> Result<Value, Value> {
-    route(&state, &method, &path, body.unwrap_or(Value::Null)).await.map_err(|e| json!({"status": e.status, "error": e.message}))
+pub async fn api(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<'_, AppState>, method: String, path: String, body: Option<Value>) -> Result<Value, Value> {
+    let result = route(&state, &method, &path, body.unwrap_or(Value::Null)).await;
+    if let Ok(data) = &result { crate::windows::after_change(&app, &window, &method, &path, data) }
+    result.map_err(|e| json!({"status": e.status, "error": e.message}))
+}
+
+/// A new empty note in the current session, for the tray menu. Colors rotate as they do on the board.
+pub fn create_note(s: &AppState) -> ApiResult {
+    let space = current_space(s)?;
+    let count = store::notes_in(&s.db(), &space, false)?.len();
+    notes(s, "POST", json!({"color": NOTE_COLORS[count % NOTE_COLORS.len()]}))
 }
 
 async fn route(s: &AppState, method: &str, path: &str, body: Value) -> ApiResult {

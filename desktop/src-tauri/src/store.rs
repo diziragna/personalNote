@@ -82,9 +82,21 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
              collapsed INTEGER NOT NULL, width INTEGER, height INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
              cloud_updated_at TEXT, dirty INTEGER NOT NULL, deleted INTEGER NOT NULL, revision INTEGER NOT NULL, conflict TEXT);
          CREATE INDEX IF NOT EXISTS notes_space_idx ON notes(space);
-         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS note_places (note_id TEXT PRIMARY KEY, x INTEGER NOT NULL, y INTEGER NOT NULL);
+         DELETE FROM note_places WHERE note_id NOT IN (SELECT id FROM notes);",
     )?;
     Ok(db)
+}
+
+/// Where a note's window was left on this device's screen, in physical pixels. Never synced: every device has its own screen.
+pub fn place(db: &Connection, note_id: &str) -> rusqlite::Result<Option<(i32, i32)>> {
+    db.query_row("SELECT x, y FROM note_places WHERE note_id = ?1", [note_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()
+}
+
+pub fn set_place(db: &Connection, note_id: &str, x: i32, y: i32) -> rusqlite::Result<()> {
+    db.execute("INSERT OR REPLACE INTO note_places (note_id, x, y) VALUES (?1, ?2, ?3)", params![note_id, x, y])?;
+    Ok(())
 }
 
 const NOTE_COLUMNS: &str = "id, space, title, content, color, completed, due_date, pos_x, pos_y, z_index, collapsed, width, height, \
