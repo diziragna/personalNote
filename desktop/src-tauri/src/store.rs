@@ -151,6 +151,13 @@ pub fn adopt_cave_notes(db: &Connection, space: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Signing out: notes the cloud has never seen exist only on this device, so they stay here, in the cave,
+/// instead of disappearing with the account. They join whichever account signs in next.
+pub fn keep_unsynced_in_cave(db: &Connection, space: &str) -> rusqlite::Result<()> {
+    db.execute("UPDATE notes SET space = ?1, conflict = NULL, dirty = 1 WHERE space = ?2 AND cloud_updated_at IS NULL AND deleted = 0", params![CAVE, space])?;
+    Ok(())
+}
+
 /// After an account is deleted its notes stay on this device, back in the cave.
 pub fn release_to_cave(db: &Connection, space: &str) -> rusqlite::Result<()> {
     db.execute("DELETE FROM notes WHERE space = ?1 AND deleted = 1", [space])?;

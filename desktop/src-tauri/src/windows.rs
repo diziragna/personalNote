@@ -13,7 +13,7 @@ pub const NOTE_PREFIX: &str = "note-";
 /// Sent to the windows when notes were added, removed, or changed outside the window that shows them.
 const CHANGED: &str = "notes-changed";
 
-/// Tells the main window to show the account form, or the sign-in screen when there is no account to change.
+/// Tells the main window to show the account form, or the sign-in screen when nobody is signed in to an account.
 pub const OPEN_ACCOUNT: &str = "open-account";
 /// Tells the main window that the tray signed the account out.
 const SIGNED_OUT: &str = "signed-out";
@@ -132,6 +132,8 @@ pub fn after_change(app: &AppHandle, source: &WebviewWindow, method: &str, path:
         let _ = app.emit_to("main", CHANGED, ());
         return;
     }
+    // Signing in, signing out, and entering the cave change what the tray menu offers.
+    if path == "/api/auth" || path == "/api/desktop/cave" { crate::tray::refresh(app) }
     let created = on_notes && method == "POST";
     let near = if created && source.label().starts_with(NOTE_PREFIX) { source.outer_position().ok() } else { None };
     reconcile(app, near, created);
@@ -175,19 +177,19 @@ pub fn hide_main(app: AppHandle) {
     if let Some(window) = app.get_webview_window("main") { let _ = window.hide(); }
 }
 
-/// Sign out from the tray: the notes leave the screen (they stay on this device) and the sign-in screen opens.
-/// In the cave there is no account to sign out of, so this is the way out of the cave: sign in or create one.
+/// Sign out from the tray. Notes the cloud never saw stay on the screen, in the cave; with none of those,
+/// the sign-in screen opens.
 pub async fn sign_out(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let signed_in = state.session().as_ref().is_some_and(|session| session.account_id().is_some());
-    if signed_in {
-        let _ = api::sign_out(&state, Value::Null).await;
-        reconcile(app, None, false);
-        let _ = app.emit(SIGNED_OUT, ());
+    let _ = api::sign_out(&state, Value::Null).await;
+    reconcile(app, None, false);
+    crate::tray::refresh(app);
+    if state.session().is_some() {
+        let _ = app.emit(CHANGED, ());
     } else {
-        let _ = app.emit(OPEN_ACCOUNT, ());
+        let _ = app.emit(SIGNED_OUT, ());
+        show_main(app);
     }
-    show_main(app);
 }
 
 /// Create an empty note and open its window. Returns false when nobody is signed in.

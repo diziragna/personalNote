@@ -932,8 +932,8 @@ async function openNoteWindowMenu(note) {
       renderNote(note).querySelector('.deadline-edit-form input')?.focus();
     } },
   ];
-  if (showsSync()) items.push({ text: 'Sync this note', action: () => syncNotes([note.id]) });
-  items.push({ item: 'Separator' }, { text: 'Delete note', action: () => confirmDelete(note) });
+  // Syncing needs an account: the item is there from the start and greyed out in the cave.
+  items.push({ text: 'Sync this note', enabled: showsSync(), action: () => syncNotes([note.id]) }, { item: 'Separator' }, { text: 'Delete note', action: () => confirmDelete(note) });
   const menu = await window.__TAURI__.menu.Menu.new({ items });
   await menu.popup();
 }
@@ -1088,7 +1088,11 @@ async function reloadWhenIdle() {
     return;
   }
   state.reloadPending = false;
-  try { await loadNotes(); } catch (_) { /* Signed out meanwhile; the app closes or resets this window. */ }
+  try {
+    // The session can change under a desktop window: signing in from the cave, or signing out back into it.
+    if (IS_DESKTOP && state.username) displayDashboard(await request('/api/auth'));
+    await loadNotes();
+  } catch (_) { /* Signed out meanwhile; the app closes or resets this window. */ }
 }
 
 // While online, cloud changes come down on their own, at most once a minute; nothing goes up until the user syncs.
@@ -1295,8 +1299,13 @@ $('#delete-account-form').addEventListener('submit', async (event) => {
   const button = $('#confirm-delete-account');
   button.disabled = true;
   try {
-    await request('/api/auth', { method: 'DELETE', body: JSON.stringify({ delete_account: true, password: $('#delete-account-password').value }) });
+    const result = await request('/api/auth', { method: 'DELETE', body: JSON.stringify({ delete_account: true, password: $('#delete-account-password').value }) });
     $('#delete-account-dialog').close();
+    // On the desktop the account's notes stay on the screen, in the cave, and the app carries on there.
+    if (result.cave) {
+      displayDashboard({ username: 'cave', cave: true });
+      return;
+    }
     state.cave = false;
     showAuthView();
     toast(IS_DESKTOP ? 'Account deleted. Its notes are still on this device, in the cave.' : 'Your account was deleted.');
@@ -1389,7 +1398,7 @@ function watchNoteWindow() {
     // The tray's Account menu drives this window: the account form, or the sign-in screen without an account.
     window.__TAURI__.event.listen('open-account', () => {
       if (state.username && !state.cave) $('#settings-button').click();
-      else showAuthView(state.cave ? 'signup' : 'signin');
+      else showAuthView('signin');
     });
     window.__TAURI__.event.listen('signed-out', () => {
       state.cave = false;
