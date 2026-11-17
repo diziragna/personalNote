@@ -68,8 +68,17 @@ pub fn cloud_error(error: CloudError, offline_message: &str) -> ApiError {
 }
 
 #[tauri::command]
-pub async fn api(state: tauri::State<'_, AppState>, method: String, path: String, body: Option<Value>) -> Result<Value, Value> {
-    route(&state, &method, &path, body.unwrap_or(Value::Null)).await.map_err(|e| json!({"status": e.status, "error": e.message}))
+pub async fn api(app: tauri::AppHandle, window: tauri::WebviewWindow, state: tauri::State<'_, AppState>, method: String, path: String, body: Option<Value>) -> Result<Value, Value> {
+    let result = route(&state, &method, &path, body.unwrap_or(Value::Null)).await;
+    if let Ok(data) = &result { crate::windows::after_change(&app, &window, &method, &path, data) }
+    result.map_err(|e| json!({"status": e.status, "error": e.message}))
+}
+
+/// A new empty note in the current session, for the tray menu. Colors rotate as they do on the board.
+pub fn create_note(s: &AppState) -> ApiResult {
+    let space = current_space(s)?;
+    let count = store::notes_in(&s.db(), &space, false)?.len();
+    notes(s, "POST", json!({"color": NOTE_COLORS[count % NOTE_COLORS.len()]}))
 }
 
 async fn route(s: &AppState, method: &str, path: &str, body: Value) -> ApiResult {
@@ -201,9 +210,10 @@ async fn change_credentials(s: &AppState, body: Value) -> ApiResult {
     Ok(json!({"username": username, "cave": false}))
 }
 
-/// Signing out keeps the account's notes on this device and in the cloud. Deleting the account removes it
-/// from the cloud; its notes stay on this device, in the cave.
-async fn sign_out(s: &AppState, body: Value) -> ApiResult {
+/// Signing out keeps the account's synced notes on this device and in the cloud, for the next sign-in; notes
+/// the cloud never saw go back to the cave. Deleting the account removes it from the cloud; its notes stay on
+/// this device, in the cave.
+pub async fn sign_out(s: &AppState, body: Value) -> ApiResult {
     let account_id = s.session().as_ref().and_then(|session| session.account_id().map(str::to_owned));
     if body["delete_account"].as_bool() == Some(true) {
         let (id, token) = ensure_token(s).await?;
@@ -218,10 +228,13 @@ async fn sign_out(s: &AppState, body: Value) -> ApiResult {
         // Revoke the session in the cloud when possible; signing out on this device works either way.
         if let Some(token) = token { let _ = cloud::call(&s.http, Method::DELETE, "/api/auth", Some(&token), None).await; }
         drop_token(s, &id)?;
+        store::keep_unsynced_in_cave(&s.db(), &id)?;
     }
-    store::set_setting(&s.db(), "session", None)?;
-    *s.session() = None;
-    Ok(json!({"ok": true}))
+    // Notes that are only on this device stay on the screen: the app carries on in the cave instead of signing out to nothing.
+    let cave = store::count_where(&s.db(), CAVE, "deleted = 0")? > 0;
+    store::set_setting(&s.db(), "session", cave.then_some(CAVE))?;
+    *s.session() = cave.then(|| Session { space: CAVE.into(), username: "cave".into(), password: None });
+    Ok(json!({"ok": true, "cave": cave}))
 }
 
 #[derive(Deserialize)]

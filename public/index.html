@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#f5f4f0">
   <title>Daynote — a quieter place for your thoughts</title>
   <script>try{if(localStorage.getItem('daynote.theme')==='dark')document.documentElement.dataset.theme='dark'}catch{}</script>
+  <script>try{if(window.__TAURI_INTERNALS__.metadata.currentWindow.label.startsWith('note-'))document.documentElement.classList.add('note-window')}catch{}</script>
   <link rel="preload" href="/fonts/dm-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/fonts/fonts.css">
