@@ -13,23 +13,21 @@ mod rules;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::Emitter;
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use crate::windows::show_main;
 
 /// Passed when the system starts Daynote at login, so it does not open the sign-in window on its own.
 const HIDDEN_ARG: &str = "--hidden";
 
-/// The main window is only for the account: signing in, signing out, and settings. The notes are windows of their own.
-fn show_main(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
-}
-
-/// Bring the notes forward, or the main window when there are none to show.
+/// Bring the notes forward. With none to show, start a first note, or open the sign-in window when nobody is signed in.
 fn show_notes(app: &AppHandle) {
-    if windows::show_notes(app) == 0 { show_main(app) }
+    if windows::show_notes(app) > 0 { return }
+    // Windows cannot be opened from inside a menu or tray event, so the note is made on another thread.
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if !windows::new_note(&app) { show_main(&app) }
+    });
 }
 
 fn main() {
@@ -55,6 +53,7 @@ fn main() {
                 let _ = autolaunch.enable();
                 store::set_setting(&state.db(), "autostart_set", Some("1"))?;
             }
+            let dark = store::setting(&state.db(), "theme")?.as_deref() == Some("dark");
             let auto_sync = store::setting(&state.db(), sync::MODE_SETTING)?.as_deref() == Some(sync::AUTO);
             app.manage(state);
 
@@ -66,12 +65,15 @@ fn main() {
             let sync_manual = CheckMenuItem::with_id(app, "sync-manual", "Sync only when I ask", true, !auto_sync, None::<&str>)?;
             let sync_now = MenuItem::with_id(app, "sync-now", "Sync now", true, None::<&str>)?;
             let sync_menu = Submenu::with_items(app, "Sync", true, &[&sync_auto, &sync_manual, &PredefinedMenuItem::separator(app)?, &sync_now])?;
-            let open = MenuItem::with_id(app, "open", "Account…", true, None::<&str>)?;
+            let change_password = MenuItem::with_id(app, "change-password", "Change password…", true, None::<&str>)?;
+            let sign_out = MenuItem::with_id(app, "sign-out", "Sign out", true, None::<&str>)?;
+            let account_menu = Submenu::with_items(app, "Account", true, &[&change_password, &sign_out])?;
+            let dark_mode = CheckMenuItem::with_id(app, "dark", "Dark mode", true, dark, None::<&str>)?;
             let autostart = CheckMenuItem::with_id(app, "autostart", "Start with the system", true, autolaunch.is_enabled().unwrap_or(false), None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Daynote", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[
                 &new_note, &show, &hide, &PredefinedMenuItem::separator(app)?,
-                &sync_menu, &open, &autostart, &PredefinedMenuItem::separator(app)?, &quit,
+                &sync_menu, &account_menu, &dark_mode, &autostart, &PredefinedMenuItem::separator(app)?, &quit,
             ])?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().cloned().expect("app icon"))
@@ -88,7 +90,20 @@ fn main() {
                     }
                     "show" => show_notes(app),
                     "hide" => windows::hide_notes(app),
-                    "open" => show_main(app),
+                    // The account form opens by itself in the main window; without an account it is the sign-in screen.
+                    "change-password" => {
+                        let _ = app.emit(windows::OPEN_ACCOUNT, ());
+                        show_main(app);
+                    }
+                    "sign-out" => {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move { windows::sign_out(&app).await });
+                    }
+                    "dark" => {
+                        let dark = dark_mode.is_checked().unwrap_or(false);
+                        let _ = store::set_setting(&app.state::<api::AppState>().db(), "theme", Some(if dark { "dark" } else { "light" }));
+                        let _ = app.emit(windows::THEME, dark);
+                    }
                     id @ ("sync-auto" | "sync-manual") => {
                         let auto = id == "sync-auto";
                         let _ = sync_auto.set_checked(auto);
@@ -116,9 +131,10 @@ fn main() {
 
             windows::start_auto_sync(app.handle().clone());
 
-            // The notes go straight onto the desktop. The main window only opens when there is nothing to show yet.
+            // The notes go straight onto the desktop. Opened by hand with none to show, Daynote starts a first
+            // note, or shows the sign-in window when nobody is signed in.
             let notes = windows::reconcile(app.handle(), None, false);
-            if notes == 0 && !std::env::args().any(|arg| arg == HIDDEN_ARG) { show_main(app.handle()) }
+            if notes == 0 && !std::env::args().any(|arg| arg == HIDDEN_ARG) && !windows::new_note(app.handle()) { show_main(app.handle()) }
             Ok(())
         })
         // Closing the main window keeps Daynote running in the tray; Quit in the tray menu exits.
@@ -129,7 +145,7 @@ fn main() {
                 if window.label() == "main" { let _ = window.hide(); }
             }
         })
-        .invoke_handler(tauri::generate_handler![api::api, windows::note_drag, windows::note_place, windows::note_fit])
+        .invoke_handler(tauri::generate_handler![api::api, windows::note_drag, windows::note_place, windows::note_fit, windows::hide_main])
         .run(tauri::generate_context!())
         .expect("error while running Daynote");
 }

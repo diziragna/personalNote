@@ -212,7 +212,7 @@ async fn change_credentials(s: &AppState, body: Value) -> ApiResult {
 
 /// Signing out keeps the account's notes on this device and in the cloud. Deleting the account removes it
 /// from the cloud; its notes stay on this device, in the cave.
-async fn sign_out(s: &AppState, body: Value) -> ApiResult {
+pub async fn sign_out(s: &AppState, body: Value) -> ApiResult {
     let account_id = s.session().as_ref().and_then(|session| session.account_id().map(str::to_owned));
     if body["delete_account"].as_bool() == Some(true) {
         let (id, token) = ensure_token(s).await?;

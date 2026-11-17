@@ -470,7 +470,7 @@ function updateBoardMeta() {
   }
   const count = state.notes.length;
   $('#note-count').textContent = `${count} ${count === 1 ? 'note' : 'notes'}`;
-  $('#empty-state').hidden = !DESKTOP_HOME && count !== 0;
+  $('#empty-state').hidden = count !== 0;
   fitCanvas();
 }
 
@@ -1157,6 +1157,21 @@ function displayDashboard({ username, cave = false }) {
   $('#settings-button').hidden = cave;
   $('#signout-button').hidden = cave;
   $('#sync-controls').hidden = !showsSync();
+  // On the desktop the notes are on the screen, not in this window; once signed in it only ever shows the account form.
+  if (DESKTOP_HOME) {
+    $('#dashboard').hidden = true;
+    $('#signed-in-nav').hidden = true;
+  }
+}
+
+// Signed in on the desktop: bring the account's notes down, start a first note if there is none, and get out of the way.
+async function leaveForDesktop() {
+  if (showsSync()) {
+    await request('/api/desktop/pull', { method: 'POST' });
+    await loadNotes();
+  }
+  if (!state.notes.length) await createNote();
+  invoke('hide_main').catch(() => {});
 }
 
 function showAuthView(mode = 'signin') {
@@ -1204,7 +1219,8 @@ $('#auth-form').addEventListener('submit', async (event) => {
     const data = await request('/api/auth', { method: 'POST', body: JSON.stringify({ action: state.mode, username: $('#username').value.trim(), password: $('#password').value }) });
     displayDashboard(data);
     await loadNotes();
-    pullFromCloud();
+    if (DESKTOP_HOME) await leaveForDesktop();
+    else pullFromCloud();
   } catch (err) {
     showError(error, err.message);
   } finally {
@@ -1256,6 +1272,7 @@ $('#cave-button').addEventListener('click', async () => {
   try {
     displayDashboard(await request('/api/desktop/cave', { method: 'POST' }));
     await loadNotes();
+    await leaveForDesktop();
   } catch (error) {
     showError($('#auth-error'), error.message);
   }
@@ -1291,6 +1308,7 @@ $('#delete-account-form').addEventListener('submit', async (event) => {
 });
 
 $('#settings-button').addEventListener('click', () => {
+  if ($('#settings-dialog').open) return;
   $('#account-menu').hidden = true;
   $('#settings-username').value = state.username;
   $('#current-password').value = '';
@@ -1365,10 +1383,22 @@ function watchNoteWindow() {
       reloadWhenIdle();
     });
     window.addEventListener('storage', (event) => { if (event.key === 'daynote.theme') applyTheme(event.newValue === 'dark'); });
+    window.__TAURI__.event.listen('theme', ({ payload }) => applyTheme(Boolean(payload)));
   }
   if (DESKTOP_HOME) {
-    $('#empty-state h3').textContent = 'Your notes live on your desktop.';
-    $('#empty-state p').textContent = 'Press New note to stick one anywhere on your screen. You can close this window; Daynote stays in the tray.';
+    // The tray's Account menu drives this window: the account form, or the sign-in screen without an account.
+    window.__TAURI__.event.listen('open-account', () => {
+      if (state.username && !state.cave) $('#settings-button').click();
+      else showAuthView(state.cave ? 'signup' : 'signin');
+    });
+    window.__TAURI__.event.listen('signed-out', () => {
+      state.cave = false;
+      showAuthView();
+    });
+    // With the account form closed there is nothing left to show while signed in.
+    for (const id of ['#settings-dialog', '#delete-account-dialog']) {
+      $(id).addEventListener('close', () => { if (state.username && !document.querySelector('dialog[open]')) invoke('hide_main').catch(() => {}); });
+    }
   }
   if (NOTE_WINDOW_ID) watchNoteWindow();
   try {

@@ -13,6 +13,13 @@ pub const NOTE_PREFIX: &str = "note-";
 /// Sent to the windows when notes were added, removed, or changed outside the window that shows them.
 const CHANGED: &str = "notes-changed";
 
+/// Tells the main window to show the account form, or the sign-in screen when there is no account to change.
+pub const OPEN_ACCOUNT: &str = "open-account";
+/// Tells the main window that the tray signed the account out.
+const SIGNED_OUT: &str = "signed-out";
+/// Tells every window that dark mode was turned on (`true`) or off.
+pub const THEME: &str = "theme";
+
 const DEFAULT_WIDTH: f64 = 248.0;
 const DEFAULT_HEIGHT: f64 = 220.0;
 /// The height of a collapsed note until its page measures the real one.
@@ -151,6 +158,36 @@ pub fn start_auto_sync(app: AppHandle) {
         let reached = tauri::async_runtime::block_on(sync_all(&app));
         if !reached || sync::waiting_for_auto(&app.state::<AppState>()) { std::thread::sleep(std::time::Duration::from_secs(55)) }
     });
+}
+
+/// The main window never shows notes. It holds the sign-in screen and the account form, and stays hidden otherwise.
+pub fn show_main(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// The main window's page is done: the user signed in, or closed the account form.
+#[tauri::command]
+pub fn hide_main(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") { let _ = window.hide(); }
+}
+
+/// Sign out from the tray: the notes leave the screen (they stay on this device) and the sign-in screen opens.
+/// In the cave there is no account to sign out of, so this is the way out of the cave: sign in or create one.
+pub async fn sign_out(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let signed_in = state.session().as_ref().is_some_and(|session| session.account_id().is_some());
+    if signed_in {
+        let _ = api::sign_out(&state, Value::Null).await;
+        reconcile(app, None, false);
+        let _ = app.emit(SIGNED_OUT, ());
+    } else {
+        let _ = app.emit(OPEN_ACCOUNT, ());
+    }
+    show_main(app);
 }
 
 /// Create an empty note and open its window. Returns false when nobody is signed in.
