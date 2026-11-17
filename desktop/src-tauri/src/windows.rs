@@ -3,6 +3,7 @@
 
 use crate::api::{self, AppState};
 use crate::store::{self, LocalNote};
+use crate::sync;
 use serde_json::Value;
 use std::collections::HashSet;
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -128,6 +129,28 @@ pub fn after_change(app: &AppHandle, source: &WebviewWindow, method: &str, path:
     let near = if created && source.label().starts_with(NOTE_PREFIX) { source.outer_position().ok() } else { None };
     reconcile(app, near, created);
     let _ = app.emit(CHANGED, ());
+}
+
+/// Send every waiting change to the cloud and bring the cloud's notes down, as "Sync all" does, then bring
+/// the windows up to date. Returns whether the cloud was reached.
+pub async fn sync_all(app: &AppHandle) -> bool {
+    let reached = sync::sync(&app.state::<AppState>(), Value::Null).await.is_ok();
+    if reached {
+        reconcile(app, None, false);
+        let _ = app.emit(CHANGED, ());
+    }
+    reached
+}
+
+/// With "Sync automatically when online" chosen, changes go up a few seconds after they are made. A sync that
+/// fails or leaves changes behind (offline, or the cloud refused a note) is tried again a minute later.
+pub fn start_auto_sync(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if !sync::waiting_for_auto(&app.state::<AppState>()) { continue }
+        let reached = tauri::async_runtime::block_on(sync_all(&app));
+        if !reached || sync::waiting_for_auto(&app.state::<AppState>()) { std::thread::sleep(std::time::Duration::from_secs(55)) }
+    });
 }
 
 /// Create an empty note and open its window. Returns false when nobody is signed in.

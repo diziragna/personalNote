@@ -9,6 +9,18 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
+/// The setting that says how changes reach the cloud: `AUTO`, or anything else for only when the user asks.
+pub const MODE_SETTING: &str = "sync_mode";
+pub const AUTO: &str = "auto";
+
+/// Whether the user chose to sync automatically and a signed-in account has changes the cloud has not seen.
+pub fn waiting_for_auto(s: &AppState) -> bool {
+    let Some(space) = s.session().as_ref().and_then(|session| session.account_id().map(str::to_owned)) else { return false };
+    let db = s.db();
+    store::setting(&db, MODE_SETTING).ok().flatten().as_deref() == Some(AUTO)
+        && store::count_where(&db, &space, "conflict IS NULL AND (dirty = 1 OR cloud_updated_at IS NULL)").unwrap_or(0) > 0
+}
+
 const OFFLINE: &str = "You're offline. Your notes are safe on this device; sync when you're back online.";
 
 fn fields_of(cloud: &Value) -> Option<NoteFields> { serde_json::from_value(cloud.clone()).ok() }

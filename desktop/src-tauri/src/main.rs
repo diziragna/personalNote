@@ -10,7 +10,7 @@ mod windows;
 #[path = "../../../src/rules.rs"]
 mod rules;
 
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -18,7 +18,7 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 /// Passed when the system starts Daynote at login, so it does not open the sign-in window on its own.
 const HIDDEN_ARG: &str = "--hidden";
 
-/// The main window is only for the account: signing in, syncing, and settings. The notes are windows of their own.
+/// The main window is only for the account: signing in, signing out, and settings. The notes are windows of their own.
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -55,17 +55,23 @@ fn main() {
                 let _ = autolaunch.enable();
                 store::set_setting(&state.db(), "autostart_set", Some("1"))?;
             }
+            let auto_sync = store::setting(&state.db(), sync::MODE_SETTING)?.as_deref() == Some(sync::AUTO);
             app.manage(state);
 
             let new_note = MenuItem::with_id(app, "new", "New note", true, None::<&str>)?;
             let show = MenuItem::with_id(app, "show", "Show notes", true, None::<&str>)?;
             let hide = MenuItem::with_id(app, "hide", "Hide notes", true, None::<&str>)?;
-            let open = MenuItem::with_id(app, "open", "Account and sync…", true, None::<&str>)?;
+            // The two sync choices behave as radio buttons: picking one unticks the other.
+            let sync_auto = CheckMenuItem::with_id(app, "sync-auto", "Sync automatically when online", true, auto_sync, None::<&str>)?;
+            let sync_manual = CheckMenuItem::with_id(app, "sync-manual", "Sync only when I ask", true, !auto_sync, None::<&str>)?;
+            let sync_now = MenuItem::with_id(app, "sync-now", "Sync now", true, None::<&str>)?;
+            let sync_menu = Submenu::with_items(app, "Sync", true, &[&sync_auto, &sync_manual, &PredefinedMenuItem::separator(app)?, &sync_now])?;
+            let open = MenuItem::with_id(app, "open", "Account…", true, None::<&str>)?;
             let autostart = CheckMenuItem::with_id(app, "autostart", "Start with the system", true, autolaunch.is_enabled().unwrap_or(false), None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Daynote", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[
                 &new_note, &show, &hide, &PredefinedMenuItem::separator(app)?,
-                &open, &autostart, &PredefinedMenuItem::separator(app)?, &quit,
+                &sync_menu, &open, &autostart, &PredefinedMenuItem::separator(app)?, &quit,
             ])?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().cloned().expect("app icon"))
@@ -83,6 +89,17 @@ fn main() {
                     "show" => show_notes(app),
                     "hide" => windows::hide_notes(app),
                     "open" => show_main(app),
+                    id @ ("sync-auto" | "sync-manual") => {
+                        let auto = id == "sync-auto";
+                        let _ = sync_auto.set_checked(auto);
+                        let _ = sync_manual.set_checked(!auto);
+                        let mode = if auto { sync::AUTO } else { "manual" };
+                        let _ = store::set_setting(&app.state::<api::AppState>().db(), sync::MODE_SETTING, Some(mode));
+                    }
+                    "sync-now" => {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move { windows::sync_all(&app).await; });
+                    }
                     "autostart" => {
                         let enable = autostart.is_checked().unwrap_or(false);
                         let _ = if enable { app.autolaunch().enable() } else { app.autolaunch().disable() };
@@ -96,6 +113,8 @@ fn main() {
                     }
                 })
                 .build(app)?;
+
+            windows::start_auto_sync(app.handle().clone());
 
             // The notes go straight onto the desktop. The main window only opens when there is nothing to show yet.
             let notes = windows::reconcile(app.handle(), None, false);
